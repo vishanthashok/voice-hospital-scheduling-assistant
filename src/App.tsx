@@ -2,13 +2,13 @@ import { useState, useEffect } from "react";
 import { auth, db, loginWithGoogle, logout } from "./firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { collection, query, orderBy, onSnapshot, limit, addDoc } from "firebase/firestore";
-import { 
-  Calendar, 
-  Clock, 
-  User as UserIcon, 
-  Phone, 
-  AlertCircle, 
-  LogOut, 
+import {
+  Calendar,
+  Clock,
+  User as UserIcon,
+  Phone,
+  AlertCircle,
+  LogOut,
   LayoutDashboard,
   Activity,
   Plus,
@@ -24,13 +24,13 @@ import {
   ToggleRight
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
   ResponsiveContainer,
   Cell,
   AreaChart,
@@ -57,6 +57,36 @@ interface Log {
   timestamp: string;
 }
 
+export interface PatientRecord {
+  id: string;
+  name: string;
+  age: number;
+  gender: string;
+  condition: string;
+  priority: "High" | "Medium" | "Low";
+  phone: string;
+  language: string;
+  status: string;
+}
+
+export const mockPatients: PatientRecord[] = [
+  { id: "P001", name: "John Martinez", age: 62, gender: "M", condition: "Hypertension", priority: "Medium", phone: "2105550181", language: "English", status: "Scheduled" },
+  { id: "P002", name: "Aisha Khan", age: 29, gender: "F", condition: "Asthma", priority: "Low", phone: "2105550192", language: "English", status: "Completed" },
+  { id: "P003", name: "Michael Johnson", age: 71, gender: "M", condition: "Diabetes", priority: "High", phone: "2105550110", language: "English", status: "Missed" },
+  { id: "P004", name: "Sophia Lee", age: 45, gender: "F", condition: "Chronic back pain", priority: "Medium", phone: "2105550133", language: "English", status: "Scheduled" },
+  { id: "P005", name: "Carlos Rivera", age: 38, gender: "M", condition: "Anxiety", priority: "Low", phone: "2105550177", language: "Spanish", status: "Scheduled" },
+  { id: "P006", name: "Emily Davis", age: 54, gender: "F", condition: "COPD", priority: "High", phone: "2105550144", language: "English", status: "In Call Queue" },
+  { id: "P007", name: "David Wilson", age: 67, gender: "M", condition: "Heart disease", priority: "High", phone: "2105550155", language: "English", status: "Needs Follow-up" },
+  { id: "P008", name: "Maria Gonzalez", age: 33, gender: "F", condition: "Thyroid disorder", priority: "Low", phone: "2105550166", language: "Spanish", status: "Completed" },
+  { id: "P009", name: "James Brown", age: 59, gender: "M", condition: "Arthritis", priority: "Medium", phone: "2105550122", language: "English", status: "Scheduled" },
+  { id: "P010", name: "Olivia Smith", age: 26, gender: "F", condition: "Migraine", priority: "Low", phone: "2105550109", language: "English", status: "Cancelled" },
+  { id: "P011", name: "Robert Taylor", age: 74, gender: "M", condition: "Hypertension", priority: "High", phone: "2105550199", language: "English", status: "In Call Queue" },
+  { id: "P012", name: "Neha Patel", age: 41, gender: "F", condition: "Diabetes", priority: "Medium", phone: "2105550118", language: "English", status: "Scheduled" },
+  { id: "P013", name: "Daniel Kim", age: 50, gender: "M", condition: "Post-surgery follow-up", priority: "High", phone: "2105550188", language: "Korean", status: "Needs Follow-up" },
+  { id: "P014", name: "Linda Moore", age: 63, gender: "F", condition: "Heart disease", priority: "High", phone: "2105550139", language: "English", status: "Missed" },
+  { id: "P015", name: "Ahmed Ali", age: 47, gender: "M", condition: "Asthma", priority: "Medium", phone: "2105550171", language: "English", status: "Scheduled" },
+];
+
 type View = "dashboard" | "schedule" | "patients" | "developer";
 
 export default function App() {
@@ -64,10 +94,10 @@ export default function App() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [isDeveloperMode, setIsDeveloperMode] = useState(false);
-  
+
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [timeframe, setTimeframe] = useState<"24h" | "7d" | "30d">("30d");
 
@@ -149,7 +179,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <motion.div 
+        <motion.div
           animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
           transition={{ duration: 2, repeat: Infinity }}
         >
@@ -162,7 +192,7 @@ export default function App() {
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="max-w-md w-full bg-slate-900 rounded-[2rem] shadow-2xl shadow-blue-900/20 p-10 text-center border border-slate-800"
@@ -190,13 +220,12 @@ export default function App() {
     if (isDeveloperMode && id !== "developer") return null;
 
     return (
-      <button 
+      <button
         onClick={() => setActiveView(id)}
-        className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition-all duration-300 ${
-          activeView === id 
-          ? "bg-blue-600/20 text-blue-400 shadow-[inset_0_0_20px_rgba(37,99,235,0.1)] border border-blue-500/20 translate-x-1" 
+        className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition-all duration-300 ${activeView === id
+          ? "bg-blue-600/20 text-blue-400 shadow-[inset_0_0_20px_rgba(37,99,235,0.1)] border border-blue-500/20 translate-x-1"
           : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
-        }`}
+          }`}
       >
         <Icon className={`w-5 h-5 ${activeView === id ? "animate-pulse" : ""}`} />
         {label}
@@ -214,7 +243,7 @@ export default function App() {
           </div>
           <span className="font-black text-2xl tracking-tighter text-white">MediVoice</span>
         </div>
-        
+
         <nav className="flex-1 space-y-3">
           <NavItem id="dashboard" icon={LayoutDashboard} label="Overview" />
           <NavItem id="schedule" icon={Calendar} label="Calendar" />
@@ -239,7 +268,7 @@ export default function App() {
               <p className="text-xs text-slate-400 font-medium truncate">{isDeveloperMode ? 'Developer' : 'Administrator'}</p>
             </div>
           </div>
-          <button 
+          <button
             onClick={logout}
             className="w-full flex items-center justify-center gap-3 py-4 text-slate-500 hover:text-red-400 font-bold transition-colors"
           >
@@ -255,14 +284,14 @@ export default function App() {
           <div className="flex items-center gap-8 flex-1">
             <div className="relative max-w-md w-full hidden md:block">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-              <input 
-                type="text" 
-                placeholder="Search appointments, patients..." 
+              <input
+                type="text"
+                placeholder="Search appointments, patients..."
                 className="w-full pl-12 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-sm font-medium text-slate-200 focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all placeholder:text-slate-600"
               />
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4">
             <button className="p-3 text-slate-400 hover:bg-slate-800 rounded-xl transition-colors relative" onClick={() => alert("Notifications coming soon")}>
               <Bell className="w-6 h-6" />
@@ -272,7 +301,7 @@ export default function App() {
               <Settings className="w-6 h-6" />
             </button>
             <div className="h-8 w-[1px] bg-slate-800 mx-2" />
-            <button 
+            <button
               onClick={() => setIsManualEntryOpen(true)}
               className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] active:scale-95"
             >
@@ -285,7 +314,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-10 scroll-smooth custom-scrollbar relative">
           <AnimatePresence mode="wait">
             {activeView === "dashboard" && (
-              <motion.div 
+              <motion.div
                 key="dashboard"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -299,14 +328,13 @@ export default function App() {
                   </div>
                   <div className="flex gap-2">
                     {["24h", "7d", "30d"].map((t: any) => (
-                      <button 
-                        key={t} 
+                      <button
+                        key={t}
                         onClick={() => setTimeframe(t)}
-                        className={`px-4 py-2 rounded-xl text-sm font-bold transition-all border ${
-                          timeframe === t 
-                          ? "bg-slate-800 border-slate-700 text-blue-400 shadow-sm" 
+                        className={`px-4 py-2 rounded-xl text-sm font-bold transition-all border ${timeframe === t
+                          ? "bg-slate-800 border-slate-700 text-blue-400 shadow-sm"
                           : "bg-transparent border-transparent text-slate-500 hover:bg-slate-800/50"
-                        }`}
+                          }`}
                       >
                         {t}
                       </button>
@@ -322,7 +350,7 @@ export default function App() {
                     { label: "Avg. Urgency", val: (filteredAppointments.reduce((acc, a) => acc + a.urgency, 0) / (filteredAppointments.length || 1)).toFixed(1), icon: Activity, color: "rose", hex: "rgba(244,63,94,0.1)", textHex: "text-rose-400" },
                     { label: "AI Accuracy", val: "98.2%", icon: Zap, color: "amber", hex: "rgba(245,158,11,0.1)", textHex: "text-amber-400" }
                   ].map((s, i) => (
-                    <motion.div 
+                    <motion.div
                       key={s.label}
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -356,14 +384,14 @@ export default function App() {
                         <AreaChart data={activityData}>
                           <defs>
                             <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
                           <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#64748b", fontWeight: 600 }} />
                           <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#64748b", fontWeight: 600 }} />
-                          <Tooltip 
+                          <Tooltip
                             contentStyle={{ borderRadius: "20px", border: "1px solid #334155", backgroundColor: "#0f172a", boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.5)", padding: "15px", color: "#e2e8f0" }}
                             itemStyle={{ color: "#3b82f6", fontWeight: "bold" }}
                           />
@@ -427,11 +455,10 @@ export default function App() {
                               <p className="text-slate-300 font-medium max-w-xs truncate">{apt.reason}</p>
                             </td>
                             <td className="px-10 py-8">
-                              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border font-bold text-xs uppercase ${
-                                apt.urgency >= 4 ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border font-bold text-xs uppercase ${apt.urgency >= 4 ? "bg-red-500/10 text-red-400 border-red-500/20" :
                                 apt.urgency === 3 ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-                                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                              }`}>
+                                  "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                }`}>
                                 <AlertCircle className="w-4 h-4" />
                                 Level {apt.urgency}
                               </div>
@@ -461,7 +488,7 @@ export default function App() {
             )}
 
             {activeView === "schedule" && (
-              <motion.div 
+              <motion.div
                 key="schedule"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -485,7 +512,7 @@ export default function App() {
             )}
 
             {activeView === "patients" && (
-              <motion.div 
+              <motion.div
                 key="patients"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -498,18 +525,71 @@ export default function App() {
                     <p className="text-slate-400 font-medium text-lg">Detailed constituent records.</p>
                   </div>
                 </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 min-h-[500px] flex items-center justify-center">
-                  <div className="text-center text-slate-500">
-                    <UserIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                    <p className="font-bold text-xl">Patient UI Block</p>
-                    <p className="text-sm">List of full patient histories and contact details.</p>
+                <div className="bg-slate-900 rounded-[2.5rem] shadow-sm border border-slate-800 overflow-hidden">
+                  <div className="p-10 border-b border-slate-800 flex items-center justify-between">
+                    <h3 className="text-2xl font-black tracking-tight text-white">All Patients</h3>
+                    <div className="flex gap-4">
+                      <button className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 transition">Export CSV</button>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="text-slate-500 text-xs font-black uppercase tracking-widest bg-slate-900/50">
+                          <th className="px-10 py-6">ID & Patient</th>
+                          <th className="px-10 py-6 text-center">Age & Sex</th>
+                          <th className="px-10 py-6">Primary Condition</th>
+                          <th className="px-10 py-6">Priority</th>
+                          <th className="px-10 py-6 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {mockPatients.map((patient) => (
+                          <tr key={patient.id} className="hover:bg-slate-800/20 transition-colors group">
+                            <td className="px-10 py-8">
+                              <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center text-slate-300 font-black text-lg shadow-inner">
+                                  {patient.name.charAt(0)}
+                                </div>
+                                <div>
+                                  <p className="font-bold text-lg text-white">{patient.name}</p>
+                                  <p className="text-sm text-slate-400 font-medium">{patient.id} • {patient.phone.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3")}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-10 py-8 text-center text-slate-300 font-medium">
+                              {patient.age} y/o • <span className="text-slate-500 font-bold">{patient.gender}</span>
+                            </td>
+                            <td className="px-10 py-8">
+                              <p className="text-slate-300 font-medium">{patient.condition}</p>
+                              <p className="text-xs text-slate-500 font-bold uppercase mt-1">Lang: {patient.language}</p>
+                            </td>
+                            <td className="px-10 py-8">
+                              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border font-bold text-xs uppercase ${patient.priority === "High" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                                patient.priority === "Medium" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                                  "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                }`}>
+                                <Activity className="w-4 h-4" />
+                                {patient.priority}
+                              </div>
+                            </td>
+                            <td className="px-10 py-8 text-right font-bold text-slate-300">
+                              {patient.status === "Scheduled" && <span className="text-emerald-400">{patient.status}</span>}
+                              {patient.status === "In Call Queue" && <span className="text-blue-400">{patient.status}</span>}
+                              {patient.status === "Missed" || patient.status === "Cancelled" ? <span className="text-rose-400">{patient.status}</span> : ""}
+                              {patient.status !== "Scheduled" && patient.status !== "In Call Queue" && patient.status !== "Missed" && patient.status !== "Cancelled" ? patient.status : ""}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </motion.div>
             )}
 
             {activeView === "developer" && (
-              <motion.div 
+              <motion.div
                 key="developer"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -535,7 +615,7 @@ export default function App() {
                     <h3 className="text-xl font-black tracking-tight text-white">Voice Workflow</h3>
                     <div className="bg-slate-900 p-8 rounded-[2.5rem] shadow-sm border border-slate-800 space-y-8 relative overflow-hidden">
                       <div className="absolute inset-0 bg-[linear-gradient(to_right,#0f172a_1px,transparent_1px),linear-gradient(to_bottom,#0f172a_1px,transparent_1px)] bg-[size:14px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]"></div>
-                      
+
                       {[
                         { step: "01", label: "Call Received", desc: "Twilio webhook triggers /api/voice", icon: Phone },
                         { step: "02", label: "Collect Name", desc: "Gathering speech input for patient identity", icon: UserIcon },
@@ -565,16 +645,16 @@ export default function App() {
                     <h3 className="text-xl font-black tracking-tight text-white">Live Event Stream</h3>
                     <div className="bg-[#0A0F1C] rounded-[2.5rem] p-8 shadow-2xl overflow-hidden h-[700px] flex flex-col border border-slate-800 relative group">
                       <div className="absolute inset-0 bg-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                      
+
                       <div className="flex items-center gap-3 mb-6 text-slate-500 font-mono text-xs border-b border-slate-800/50 pb-4 relative z-10">
                         <Terminal className="w-4 h-4 text-blue-500" />
                         <span className="text-blue-400">medivoice-ai-v1.0.4 <span className="text-slate-600">~ tail -f /var/log/voice.log</span></span>
                       </div>
-                      
+
                       <div className="flex-1 overflow-y-auto space-y-4 font-mono text-[13px] custom-scrollbar relative z-10 pr-2">
                         <AnimatePresence initial={false}>
                           {logs.map((log) => (
-                            <motion.div 
+                            <motion.div
                               key={log.id}
                               initial={{ opacity: 0, x: -10 }}
                               animate={{ opacity: 1, x: 0 }}
@@ -582,11 +662,10 @@ export default function App() {
                             >
                               <span className="text-slate-600 shrink-0">[{format(new Date(log.timestamp), "HH:mm:ss")}]</span>
                               <div className="flex-1">
-                                <span className={`font-bold ${
-                                  log.event.includes("FAILED") ? "text-rose-500" : 
-                                  log.event.includes("CREATED") ? "text-emerald-400" : 
-                                  "text-blue-400"
-                                }`}>
+                                <span className={`font-bold ${log.event.includes("FAILED") ? "text-rose-500" :
+                                  log.event.includes("CREATED") ? "text-emerald-400" :
+                                    "text-blue-400"
+                                  }`}>
                                   {log.event}
                                 </span>
                                 <span className="text-slate-500 ml-3">sid: {log.callSid.slice(-6)}</span>
@@ -611,14 +690,14 @@ export default function App() {
       <AnimatePresence>
         {isManualEntryOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
               onClick={() => setIsManualEntryOpen(false)}
             />
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -630,7 +709,7 @@ export default function App() {
                   <p className="text-slate-400 text-sm">Manually insert a record into the system.</p>
                 </div>
                 <button onClick={() => setIsManualEntryOpen(false)} className="p-2 bg-slate-800 text-slate-400 rounded-xl hover:text-white transition">
-                  <X className="w-5 h-5"/>
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
