@@ -228,7 +228,7 @@ export default function App() {
   const recommendSlot = async (patient: PatientRecord) => {
     try {
       const daysSince = Math.floor((Date.now() - new Date(patient.lastVisit).getTime()) / 86400000);
-      const urgency   = patient.priority === "High" ? 4 : patient.priority === "Medium" ? 3 : 1;
+      const urgency = patient.priority === "High" ? 4 : patient.priority === "Medium" ? 3 : 1;
       const resp = await fetch("/api/ml/recommend/slot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -604,17 +604,15 @@ export default function App() {
                                 return (
                                   <td key={day} className="px-3 py-3 border-r border-slate-800/50 last:border-r-0">
                                     {patient ? (
-                                      <div className={`p-3 rounded-2xl border transition-all hover:scale-[1.02] cursor-pointer ${
-                                        patient.priority === 'High' ? 'bg-red-500/5 border-red-500/20 hover:bg-red-500/10' :
-                                        patient.priority === 'Medium' ? 'bg-amber-500/5 border-amber-500/20 hover:bg-amber-500/10' :
-                                        'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10'
-                                      }`}>
+                                      <div className={`p-3 rounded-2xl border transition-all hover:scale-[1.02] cursor-pointer ${patient.priority === 'High' ? 'bg-red-500/5 border-red-500/20 hover:bg-red-500/10' :
+                                          patient.priority === 'Medium' ? 'bg-amber-500/5 border-amber-500/20 hover:bg-amber-500/10' :
+                                            'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10'
+                                        }`}>
                                         <p className="font-bold text-sm text-white truncate">{patient.name}</p>
                                         <p className="text-xs text-slate-400 truncate mt-1">{patient.condition}</p>
-                                        <p className={`text-[10px] font-black uppercase mt-2 ${
-                                          patient.priority === 'High' ? 'text-red-400' :
-                                          patient.priority === 'Medium' ? 'text-amber-400' : 'text-emerald-400'
-                                        }`}>{patient.doctor} · {patient.priority}</p>
+                                        <p className={`text-[10px] font-black uppercase mt-2 ${patient.priority === 'High' ? 'text-red-400' :
+                                            patient.priority === 'Medium' ? 'text-amber-400' : 'text-emerald-400'
+                                          }`}>{patient.doctor} · {patient.priority}</p>
                                       </div>
                                     ) : (
                                       <div className="p-3 rounded-2xl border border-dashed border-slate-800 text-center min-h-[76px] flex items-center justify-center">
@@ -701,29 +699,25 @@ export default function App() {
                               <div className="flex flex-col items-center gap-1">
                                 {mlScores[patient.id] ? (
                                   <>
-                                    <span className={`text-sm font-black ${
-                                      mlScores[patient.id].risk_score >= 75 ? 'text-red-400' :
-                                      mlScores[patient.id].risk_score >= 40 ? 'text-amber-400' : 'text-emerald-400'
-                                    }`}>{mlScores[patient.id].risk_score}</span>
+                                    <span className={`text-sm font-black ${mlScores[patient.id].risk_score >= 75 ? 'text-red-400' :
+                                        mlScores[patient.id].risk_score >= 40 ? 'text-amber-400' : 'text-emerald-400'
+                                      }`}>{mlScores[patient.id].risk_score}</span>
                                     <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                      <div className={`h-full rounded-full ${
-                                        mlScores[patient.id].risk_score >= 75 ? 'bg-red-500' :
-                                        mlScores[patient.id].risk_score >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
-                                      }`} style={{ width: `${mlScores[patient.id].risk_score}%` }} />
+                                      <div className={`h-full rounded-full ${mlScores[patient.id].risk_score >= 75 ? 'bg-red-500' :
+                                          mlScores[patient.id].risk_score >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
+                                        }`} style={{ width: `${mlScores[patient.id].risk_score}%` }} />
                                     </div>
                                     <span className="text-[9px] text-blue-400 font-black uppercase tracking-wider">ML</span>
                                   </>
                                 ) : (
                                   <>
-                                    <span className={`text-sm font-black ${
-                                      patient.riskScore >= 75 ? 'text-red-400' :
-                                      patient.riskScore >= 40 ? 'text-amber-400' : 'text-emerald-400'
-                                    }`}>{patient.riskScore}</span>
+                                    <span className={`text-sm font-black ${patient.riskScore >= 75 ? 'text-red-400' :
+                                        patient.riskScore >= 40 ? 'text-amber-400' : 'text-emerald-400'
+                                      }`}>{patient.riskScore}</span>
                                     <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                      <div className={`h-full rounded-full ${
-                                        patient.riskScore >= 75 ? 'bg-red-500' :
-                                        patient.riskScore >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
-                                      }`} style={{ width: `${patient.riskScore}%` }} />
+                                      <div className={`h-full rounded-full ${patient.riskScore >= 75 ? 'bg-red-500' :
+                                          patient.riskScore >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
+                                        }`} style={{ width: `${patient.riskScore}%` }} />
                                     </div>
                                   </>
                                 )}
@@ -757,13 +751,12 @@ export default function App() {
                                 >
                                   <Calendar className="w-4 h-4" />
                                 </button>
-                                <span className={`font-bold text-sm ${
-                                  patient.status === "Scheduled" ? "text-emerald-400" :
-                                  patient.status === "In Call Queue" ? "text-blue-400" :
-                                  patient.status === "Completed" ? "text-slate-400" :
-                                  patient.status === "Needs Follow-up" ? "text-amber-400" :
-                                  "text-rose-400"
-                                }`}>{patient.status}</span>
+                                <span className={`font-bold text-sm ${patient.status === "Scheduled" ? "text-emerald-400" :
+                                    patient.status === "In Call Queue" ? "text-blue-400" :
+                                      patient.status === "Completed" ? "text-slate-400" :
+                                        patient.status === "Needs Follow-up" ? "text-amber-400" :
+                                          "text-rose-400"
+                                  }`}>{patient.status}</span>
                               </div>
                             </td>
                           </tr>
@@ -908,13 +901,11 @@ export default function App() {
                                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Per-Class F1</p>
                                 {Object.entries(modelInfo.priority_model.per_class_f1).map(([cls, f1]: any) => (
                                   <div key={cls} className="flex items-center gap-2 mb-1">
-                                    <span className={`text-[11px] font-bold w-16 ${
-                                      cls === 'High' ? 'text-red-400' : cls === 'Medium' ? 'text-amber-400' : 'text-emerald-400'
-                                    }`}>{cls}</span>
+                                    <span className={`text-[11px] font-bold w-16 ${cls === 'High' ? 'text-red-400' : cls === 'Medium' ? 'text-amber-400' : 'text-emerald-400'
+                                      }`}>{cls}</span>
                                     <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
-                                      <div className={`h-full rounded-full ${
-                                        cls === 'High' ? 'bg-red-500' : cls === 'Medium' ? 'bg-amber-500' : 'bg-emerald-500'
-                                      }`} style={{ width: `${(f1 * 100).toFixed(0)}%` }} />
+                                      <div className={`h-full rounded-full ${cls === 'High' ? 'bg-red-500' : cls === 'Medium' ? 'bg-amber-500' : 'bg-emerald-500'
+                                        }`} style={{ width: `${(f1 * 100).toFixed(0)}%` }} />
                                     </div>
                                     <span className="text-slate-400 text-[11px] w-8 text-right">{(f1 * 100).toFixed(0)}%</span>
                                   </div>
@@ -1060,12 +1051,10 @@ export default function App() {
               </div>
               <div className="space-y-4">
                 {slotRec.slots.map((slot: any, i: number) => (
-                  <div key={slot.slot_id} className={`p-5 rounded-2xl border flex items-center gap-5 ${
-                    i === 0 ? 'bg-blue-500/5 border-blue-500/20' : 'bg-slate-950 border-slate-800'
-                  }`}>
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-lg shrink-0 ${
-                      i === 0 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
-                    }`}>#{i + 1}</div>
+                  <div key={slot.slot_id} className={`p-5 rounded-2xl border flex items-center gap-5 ${i === 0 ? 'bg-blue-500/5 border-blue-500/20' : 'bg-slate-950 border-slate-800'
+                    }`}>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-lg shrink-0 ${i === 0 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
+                      }`}>#{i + 1}</div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3">
                         <p className="font-bold text-white">{slot.day} · {slot.time}</p>
