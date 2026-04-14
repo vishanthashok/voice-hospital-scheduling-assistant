@@ -2,20 +2,37 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# MediVoice AI - Hospital Scheduling Assistant
 
-This contains everything you need to run your app locally.
+This contains everything you need to run your healthcare AI application locally.
 
-View your app in AI Studio: https://ai.studio/apps/d9bd924c-7758-44af-a949-f19e337b524b
+## Setup & Environment Variables
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js v20+ 
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
-# voice-hospital-scheduling-assistant
+   ```bash
+   npm install
+   ```
+2. Create a `.env` file in the root directory (you can copy `.env.example` as a starting point).
+
+### Required Environment Variables
+You need to pass the real values to make the webhook trigger and the AI generate correctly:
+- **Twilio Configuration** (Used for incoming calls & voice webhooks from `server.ts`):
+  - `TWILIO_ACCOUNT_SID=your_sid_here`
+  - `TWILIO_AUTH_TOKEN=your_token_here` 
+  - `TWILIO_PHONE_NUMBER=+1234567890`
+
+### Optional / Future Configurations
+- **Gemini API Key**: `GEMINI_API_KEY=your_key_here`
+- **ElevenLabs**: `ELEVENLABS_API_KEY=your_key_here` and `ELEVENLABS_VOICE_ID=voice_id`
+
+3. Run the complete application locally (Vite frontend + Express Backend):
+   ```bash
+   npm run dev
+   ```
+
+## Local Development vs Admin Portal
+By default, the application features a toggle at the bottom-left corner of the sidebar:
+- **Admin Portal**: A dashboard for hospital staff that parses inbound database records and bookings.
+- **Developer Mode**: Visualizes real-time server logs from Twilio call inputs in `server.ts`.
