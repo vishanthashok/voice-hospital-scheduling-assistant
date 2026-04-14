@@ -67,25 +67,41 @@ export interface PatientRecord {
   phone: string;
   language: string;
   status: string;
+  insurance: string;
+  lastVisit: string;
+  riskScore: number;
+  doctor: string;
+  callNotes: string;
 }
 
 export const mockPatients: PatientRecord[] = [
-  { id: "P001", name: "John Martinez", age: 62, gender: "M", condition: "Hypertension", priority: "Medium", phone: "2105550181", language: "English", status: "Scheduled" },
-  { id: "P002", name: "Aisha Khan", age: 29, gender: "F", condition: "Asthma", priority: "Low", phone: "2105550192", language: "English", status: "Completed" },
-  { id: "P003", name: "Michael Johnson", age: 71, gender: "M", condition: "Diabetes", priority: "High", phone: "2105550110", language: "English", status: "Missed" },
-  { id: "P004", name: "Sophia Lee", age: 45, gender: "F", condition: "Chronic back pain", priority: "Medium", phone: "2105550133", language: "English", status: "Scheduled" },
-  { id: "P005", name: "Carlos Rivera", age: 38, gender: "M", condition: "Anxiety", priority: "Low", phone: "2105550177", language: "Spanish", status: "Scheduled" },
-  { id: "P006", name: "Emily Davis", age: 54, gender: "F", condition: "COPD", priority: "High", phone: "2105550144", language: "English", status: "In Call Queue" },
-  { id: "P007", name: "David Wilson", age: 67, gender: "M", condition: "Heart disease", priority: "High", phone: "2105550155", language: "English", status: "Needs Follow-up" },
-  { id: "P008", name: "Maria Gonzalez", age: 33, gender: "F", condition: "Thyroid disorder", priority: "Low", phone: "2105550166", language: "Spanish", status: "Completed" },
-  { id: "P009", name: "James Brown", age: 59, gender: "M", condition: "Arthritis", priority: "Medium", phone: "2105550122", language: "English", status: "Scheduled" },
-  { id: "P010", name: "Olivia Smith", age: 26, gender: "F", condition: "Migraine", priority: "Low", phone: "2105550109", language: "English", status: "Cancelled" },
-  { id: "P011", name: "Robert Taylor", age: 74, gender: "M", condition: "Hypertension", priority: "High", phone: "2105550199", language: "English", status: "In Call Queue" },
-  { id: "P012", name: "Neha Patel", age: 41, gender: "F", condition: "Diabetes", priority: "Medium", phone: "2105550118", language: "English", status: "Scheduled" },
-  { id: "P013", name: "Daniel Kim", age: 50, gender: "M", condition: "Post-surgery follow-up", priority: "High", phone: "2105550188", language: "Korean", status: "Needs Follow-up" },
-  { id: "P014", name: "Linda Moore", age: 63, gender: "F", condition: "Heart disease", priority: "High", phone: "2105550139", language: "English", status: "Missed" },
-  { id: "P015", name: "Ahmed Ali", age: 47, gender: "M", condition: "Asthma", priority: "Medium", phone: "2105550171", language: "English", status: "Scheduled" },
+  { id: "P001", name: "John Martinez", age: 62, gender: "M", condition: "Hypertension", priority: "Medium", phone: "2105550181", language: "English", status: "Scheduled", insurance: "Blue Cross", lastVisit: "2026-03-28", riskScore: 64, doctor: "Dr. Patel", callNotes: "Confirmed for follow-up" },
+  { id: "P002", name: "Aisha Khan", age: 29, gender: "F", condition: "Asthma", priority: "Low", phone: "2105550192", language: "English", status: "Completed", insurance: "Aetna", lastVisit: "2026-04-05", riskScore: 22, doctor: "Dr. Chen", callNotes: "Cleared — no issues" },
+  { id: "P003", name: "Michael Johnson", age: 71, gender: "M", condition: "Diabetes", priority: "High", phone: "2105550110", language: "English", status: "Missed", insurance: "Medicare", lastVisit: "2026-02-15", riskScore: 87, doctor: "Dr. Reyes", callNotes: "No answer on 3 attempts" },
+  { id: "P004", name: "Sophia Lee", age: 45, gender: "F", condition: "Chronic back pain", priority: "Medium", phone: "2105550133", language: "English", status: "Scheduled", insurance: "Cigna", lastVisit: "2026-03-20", riskScore: 45, doctor: "Dr. Patel", callNotes: "Requested morning slot" },
+  { id: "P005", name: "Carlos Rivera", age: 38, gender: "M", condition: "Anxiety", priority: "Low", phone: "2105550177", language: "Spanish", status: "Scheduled", insurance: "Medicaid", lastVisit: "2026-04-01", riskScore: 30, doctor: "Dr. Vasquez", callNotes: "Prefers Spanish-speaking staff" },
+  { id: "P006", name: "Emily Davis", age: 54, gender: "F", condition: "COPD", priority: "High", phone: "2105550144", language: "English", status: "In Call Queue", insurance: "UnitedHealth", lastVisit: "2026-03-10", riskScore: 78, doctor: "Dr. Chen", callNotes: "Awaiting callback" },
+  { id: "P007", name: "David Wilson", age: 67, gender: "M", condition: "Heart disease", priority: "High", phone: "2105550155", language: "English", status: "Needs Follow-up", insurance: "Medicare", lastVisit: "2026-03-05", riskScore: 91, doctor: "Dr. Reyes", callNotes: "Urgent — cardiology referral pending" },
+  { id: "P008", name: "Maria Gonzalez", age: 33, gender: "F", condition: "Thyroid disorder", priority: "Low", phone: "2105550166", language: "Spanish", status: "Completed", insurance: "Medicaid", lastVisit: "2026-04-08", riskScore: 18, doctor: "Dr. Vasquez", callNotes: "Lab results normal" },
+  { id: "P009", name: "James Brown", age: 59, gender: "M", condition: "Arthritis", priority: "Medium", phone: "2105550122", language: "English", status: "Scheduled", insurance: "Blue Cross", lastVisit: "2026-03-25", riskScore: 55, doctor: "Dr. Patel", callNotes: "New medication review" },
+  { id: "P010", name: "Olivia Smith", age: 26, gender: "F", condition: "Migraine", priority: "Low", phone: "2105550109", language: "English", status: "Cancelled", insurance: "Aetna", lastVisit: "2026-02-20", riskScore: 15, doctor: "Dr. Chen", callNotes: "Patient cancelled — rescheduling" },
+  { id: "P011", name: "Robert Taylor", age: 74, gender: "M", condition: "Hypertension", priority: "High", phone: "2105550199", language: "English", status: "In Call Queue", insurance: "Medicare", lastVisit: "2026-03-18", riskScore: 82, doctor: "Dr. Reyes", callNotes: "BP readings elevated" },
+  { id: "P012", name: "Neha Patel", age: 41, gender: "F", condition: "Diabetes", priority: "Medium", phone: "2105550118", language: "English", status: "Scheduled", insurance: "Cigna", lastVisit: "2026-04-02", riskScore: 48, doctor: "Dr. Patel", callNotes: "A1C trending up" },
+  { id: "P013", name: "Daniel Kim", age: 50, gender: "M", condition: "Post-surgery follow-up", priority: "High", phone: "2105550188", language: "Korean", status: "Needs Follow-up", insurance: "UnitedHealth", lastVisit: "2026-03-12", riskScore: 73, doctor: "Dr. Chen", callNotes: "Incision healing slowly" },
+  { id: "P014", name: "Linda Moore", age: 63, gender: "F", condition: "Heart disease", priority: "High", phone: "2105550139", language: "English", status: "Missed", insurance: "Medicare", lastVisit: "2026-02-28", riskScore: 89, doctor: "Dr. Reyes", callNotes: "Voicemail left x2" },
+  { id: "P015", name: "Ahmed Ali", age: 47, gender: "M", condition: "Asthma", priority: "Medium", phone: "2105550171", language: "English", status: "Scheduled", insurance: "Blue Cross", lastVisit: "2026-03-30", riskScore: 38, doctor: "Dr. Vasquez", callNotes: "Inhaler refill needed" },
 ];
+
+const scheduleSlots = [
+  { time: "9:00 AM", mon: "P001", tue: "P006", wed: null, thu: "P012", fri: "P015" },
+  { time: "10:00 AM", mon: "P004", tue: null, wed: "P009", thu: "P005", fri: null },
+  { time: "11:00 AM", mon: null, tue: "P011", wed: "P002", thu: null, fri: "P007" },
+  { time: "1:00 PM", mon: "P003", tue: "P008", wed: null, thu: "P013", fri: "P010" },
+  { time: "2:00 PM", mon: null, tue: "P014", wed: "P015", thu: null, fri: "P001" },
+  { time: "3:00 PM", mon: "P007", tue: null, wed: "P006", thu: "P009", fri: null },
+];
+
+const getPatientById = (id: string | null) => id ? mockPatients.find(p => p.id === id) : null;
 
 type View = "dashboard" | "schedule" | "patients" | "developer";
 
@@ -501,11 +517,63 @@ export default function App() {
                     <p className="text-slate-400 font-medium text-lg">Calendar view of all incoming appointments.</p>
                   </div>
                 </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 min-h-[500px] flex items-center justify-center">
-                  <div className="text-center text-slate-500">
-                    <Calendar className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                    <p className="font-bold text-xl">Calendar UI Block</p>
-                    <p className="text-sm">Integrated full calendar component will mount here.</p>
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden">
+                  <div className="p-8 border-b border-slate-800 flex items-center justify-between">
+                    <h3 className="text-xl font-black text-white">This Week — April 14–18</h3>
+                    <div className="flex gap-2">
+                      <button className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-sm hover:bg-slate-700 transition">← Prev</button>
+                      <button className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-500 transition shadow-[0_0_10px_rgba(59,130,246,0.2)]">Today</button>
+                      <button className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-sm hover:bg-slate-700 transition">Next →</button>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="text-slate-500 text-xs font-black uppercase tracking-widest">
+                          <th className="px-6 py-5 text-left border-b border-r border-slate-800 w-28">Time</th>
+                          <th className="px-6 py-5 text-center border-b border-r border-slate-800">Mon <span className="text-slate-600">14</span></th>
+                          <th className="px-6 py-5 text-center border-b border-r border-slate-800">Tue <span className="text-slate-600">15</span></th>
+                          <th className="px-6 py-5 text-center border-b border-r border-slate-800">Wed <span className="text-slate-600">16</span></th>
+                          <th className="px-6 py-5 text-center border-b border-r border-slate-800">Thu <span className="text-slate-600">17</span></th>
+                          <th className="px-6 py-5 text-center border-b border-slate-800">Fri <span className="text-slate-600">18</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scheduleSlots.map((slot) => {
+                          const days = ['mon', 'tue', 'wed', 'thu', 'fri'] as const;
+                          return (
+                            <tr key={slot.time} className="border-b border-slate-800/50 hover:bg-slate-800/10 transition-colors">
+                              <td className="px-6 py-6 border-r border-slate-800 text-slate-400 font-bold text-sm whitespace-nowrap">{slot.time}</td>
+                              {days.map((day) => {
+                                const patient = getPatientById(slot[day]);
+                                return (
+                                  <td key={day} className="px-3 py-3 border-r border-slate-800/50 last:border-r-0">
+                                    {patient ? (
+                                      <div className={`p-3 rounded-2xl border transition-all hover:scale-[1.02] cursor-pointer ${
+                                        patient.priority === 'High' ? 'bg-red-500/5 border-red-500/20 hover:bg-red-500/10' :
+                                        patient.priority === 'Medium' ? 'bg-amber-500/5 border-amber-500/20 hover:bg-amber-500/10' :
+                                        'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10'
+                                      }`}>
+                                        <p className="font-bold text-sm text-white truncate">{patient.name}</p>
+                                        <p className="text-xs text-slate-400 truncate mt-1">{patient.condition}</p>
+                                        <p className={`text-[10px] font-black uppercase mt-2 ${
+                                          patient.priority === 'High' ? 'text-red-400' :
+                                          patient.priority === 'Medium' ? 'text-amber-400' : 'text-emerald-400'
+                                        }`}>{patient.doctor} · {patient.priority}</p>
+                                      </div>
+                                    ) : (
+                                      <div className="p-3 rounded-2xl border border-dashed border-slate-800 text-center min-h-[76px] flex items-center justify-center">
+                                        <span className="text-slate-700 text-xs font-medium">Open</span>
+                                      </div>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </motion.div>
@@ -527,57 +595,82 @@ export default function App() {
                 </div>
                 <div className="bg-slate-900 rounded-[2.5rem] shadow-sm border border-slate-800 overflow-hidden">
                   <div className="p-10 border-b border-slate-800 flex items-center justify-between">
-                    <h3 className="text-2xl font-black tracking-tight text-white">All Patients</h3>
+                    <div>
+                      <h3 className="text-2xl font-black tracking-tight text-white">All Patients</h3>
+                      <p className="text-sm text-slate-500 mt-1">{mockPatients.length} records · Extended dataset</p>
+                    </div>
                     <div className="flex gap-4">
-                      <button className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 transition">Export CSV</button>
+                      <button className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 transition text-sm">Export CSV</button>
                     </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left">
                       <thead>
                         <tr className="text-slate-500 text-xs font-black uppercase tracking-widest bg-slate-900/50">
-                          <th className="px-10 py-6">ID & Patient</th>
-                          <th className="px-10 py-6 text-center">Age & Sex</th>
-                          <th className="px-10 py-6">Primary Condition</th>
-                          <th className="px-10 py-6">Priority</th>
-                          <th className="px-10 py-6 text-right">Status</th>
+                          <th className="px-8 py-5">Patient</th>
+                          <th className="px-6 py-5 text-center">Risk</th>
+                          <th className="px-6 py-5">Condition</th>
+                          <th className="px-6 py-5">Doctor</th>
+                          <th className="px-6 py-5">Insurance</th>
+                          <th className="px-6 py-5">Priority</th>
+                          <th className="px-6 py-5 text-right">Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
                         {mockPatients.map((patient) => (
                           <tr key={patient.id} className="hover:bg-slate-800/20 transition-colors group">
-                            <td className="px-10 py-8">
+                            <td className="px-8 py-6">
                               <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center text-slate-300 font-black text-lg shadow-inner">
+                                <div className="w-11 h-11 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center text-slate-300 font-black text-base shadow-inner">
                                   {patient.name.charAt(0)}
                                 </div>
                                 <div>
-                                  <p className="font-bold text-lg text-white">{patient.name}</p>
-                                  <p className="text-sm text-slate-400 font-medium">{patient.id} • {patient.phone.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3")}</p>
+                                  <p className="font-bold text-white">{patient.name}</p>
+                                  <p className="text-xs text-slate-500 font-medium">{patient.id} · {patient.age}{patient.gender} · {patient.phone.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3")}</p>
                                 </div>
                               </div>
                             </td>
-                            <td className="px-10 py-8 text-center text-slate-300 font-medium">
-                              {patient.age} y/o • <span className="text-slate-500 font-bold">{patient.gender}</span>
+                            <td className="px-6 py-6 text-center">
+                              <div className="flex flex-col items-center gap-1">
+                                <span className={`text-sm font-black ${
+                                  patient.riskScore >= 75 ? 'text-red-400' :
+                                  patient.riskScore >= 40 ? 'text-amber-400' : 'text-emerald-400'
+                                }`}>{patient.riskScore}</span>
+                                <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                  <div className={`h-full rounded-full ${
+                                    patient.riskScore >= 75 ? 'bg-red-500' :
+                                    patient.riskScore >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
+                                  }`} style={{ width: `${patient.riskScore}%` }} />
+                                </div>
+                              </div>
                             </td>
-                            <td className="px-10 py-8">
-                              <p className="text-slate-300 font-medium">{patient.condition}</p>
-                              <p className="text-xs text-slate-500 font-bold uppercase mt-1">Lang: {patient.language}</p>
+                            <td className="px-6 py-6">
+                              <p className="text-slate-300 font-medium text-sm">{patient.condition}</p>
+                              <p className="text-[11px] text-slate-600 mt-1 italic max-w-[180px] truncate">"{patient.callNotes}"</p>
                             </td>
-                            <td className="px-10 py-8">
-                              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border font-bold text-xs uppercase ${patient.priority === "High" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            <td className="px-6 py-6">
+                              <p className="text-slate-300 font-bold text-sm">{patient.doctor}</p>
+                              <p className="text-[11px] text-slate-600 mt-0.5">Last: {patient.lastVisit}</p>
+                            </td>
+                            <td className="px-6 py-6">
+                              <span className="px-3 py-1.5 bg-slate-800 border border-slate-700 text-slate-300 rounded-lg text-xs font-bold">{patient.insurance}</span>
+                            </td>
+                            <td className="px-6 py-6">
+                              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border font-bold text-xs uppercase ${patient.priority === "High" ? "bg-red-500/10 text-red-400 border-red-500/20" :
                                 patient.priority === "Medium" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
                                   "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
                                 }`}>
-                                <Activity className="w-4 h-4" />
                                 {patient.priority}
                               </div>
                             </td>
-                            <td className="px-10 py-8 text-right font-bold text-slate-300">
-                              {patient.status === "Scheduled" && <span className="text-emerald-400">{patient.status}</span>}
-                              {patient.status === "In Call Queue" && <span className="text-blue-400">{patient.status}</span>}
-                              {patient.status === "Missed" || patient.status === "Cancelled" ? <span className="text-rose-400">{patient.status}</span> : ""}
-                              {patient.status !== "Scheduled" && patient.status !== "In Call Queue" && patient.status !== "Missed" && patient.status !== "Cancelled" ? patient.status : ""}
+                            <td className="px-6 py-6 text-right">
+                              <span className={`font-bold text-sm ${
+                                patient.status === "Scheduled" ? "text-emerald-400" :
+                                patient.status === "In Call Queue" ? "text-blue-400" :
+                                patient.status === "Completed" ? "text-slate-400" :
+                                patient.status === "Needs Follow-up" ? "text-amber-400" :
+                                "text-rose-400"
+                              }`}>{patient.status}</span>
                             </td>
                           </tr>
                         ))}
