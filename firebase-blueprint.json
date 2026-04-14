@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "Appointment": {
+      "title": "Appointment",
+      "description": "A scheduled hospital appointment.",
+      "type": "object",
+      "properties": {
+        "patientName": { "type": "string", "description": "Name of the patient." },
+        "patientPhone": { "type": "string", "description": "Phone number of the patient." },
+        "reason": { "type": "string", "description": "Reason for the appointment." },
+        "urgency": { "type": "integer", "description": "Urgency level from 1 to 5." },
+        "preferredTime": { "type": "string", "format": "date-time", "description": "Requested appointment time." },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "cancelled"], "description": "Current status of the booking." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the appointment was created." }
+      },
+      "required": ["patientName", "patientPhone", "reason", "urgency", "preferredTime", "status", "createdAt"]
+    },
+    "Slot": {
+      "title": "Slot",
+      "description": "An available time slot for appointments.",
+      "type": "object",
+      "properties": {
+        "time": { "type": "string", "format": "date-time", "description": "The time of the slot." },
+        "isAvailable": { "type": "boolean", "description": "Whether the slot is currently available." }
+      },
+      "required": ["time", "isAvailable"]
+    },
+    "Log": {
+      "title": "Log",
+      "description": "A system log for tracking voice workflow events.",
+      "type": "object",
+      "properties": {
+        "callSid": { "type": "string", "description": "Unique Twilio call ID." },
+        "event": { "type": "string", "description": "The event name (e.g., 'NAME_COLLECTED')." },
+        "data": { "type": "object", "description": "Metadata associated with the event." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the event occurred." }
+      },
+      "required": ["callSid", "event", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/appointments/{appointmentId}": {
+      "schema": "Appointment",
+      "description": "Collection of all hospital appointments."
+    },
+    "/slots/{slotId}": {
+      "schema": "Slot",
+      "description": "Collection of available appointment slots."
+    },
+    "/logs/{logId}": {
+      "schema": "Log",
+      "description": "System logs for developer debugging."
+    }
+  }
+}

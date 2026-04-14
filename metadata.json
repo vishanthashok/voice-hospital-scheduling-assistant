@@ -1,0 +1,6 @@
+{
+  "name": "Voice Hospital Scheduling Assistant",
+  "description": "AI-powered voice receptionist for hospital appointment scheduling using Twilio and ElevenLabs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: appointments
+    // Document ID: auto-generated
+    // Fields:
+    //   - patientName: string (required)
+    //   - patientPhone: string (required)
+    //   - reason: string (required)
+    //   - urgency: int (required, 1-5)
+    //   - preferredTime: string (required, ISO8601)
+    //   - status: string (required, enum: pending, confirmed, cancelled)
+    //   - createdAt: string (required, ISO8601)
+    //
+    // Collection: slots
+    // Document ID: auto-generated
+    // Fields:
+    //   - time: string (required, ISO8601)
+    //   - isAvailable: bool (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "vishanth.royal@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidAppointment(data) {
+      return data.patientName is string && data.patientName.size() > 0 && data.patientName.size() < 100 &&
+             data.patientPhone is string && data.patientPhone.size() > 0 && data.patientPhone.size() < 20 &&
+             data.reason is string && data.reason.size() > 0 && data.reason.size() < 500 &&
+             data.urgency is int && data.urgency >= 1 && data.urgency <= 5 &&
+             data.preferredTime is string && data.preferredTime.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$") &&
+             data.status in ['pending', 'confirmed', 'cancelled'] &&
+             data.createdAt is string && data.createdAt.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function isValidSlot(data) {
+      return data.time is string && data.time.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$") &&
+             data.isAvailable is bool;
+    }
+
+    function isValidLog(data) {
+      return data.callSid is string && data.event is string &&
+             data.timestamp is string && data.timestamp.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /appointments/{appointmentId} {
+      // Allow creation by anyone (the AI assistant will call this from backend or client)
+      // In a real app, we might want to restrict this to a specific service account, 
+      // but for this MVP we'll allow it if the data is valid.
+      allow create: if isValidAppointment(request.resource.data);
+      
+      // Only admins can read and update appointments
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /slots/{slotId} {
+      // Anyone can read slots to see availability
+      allow read: if true;
+      
+      // Only admins can modify slots
+      allow write: if isAdmin();
+    }
+
+    match /logs/{logId} {
+      // Allow creation by anyone (backend)
+      allow create: if isValidLog(request.resource.data);
+      // Only admins can read logs
+      allow read: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read, write: if request.auth.uid == userId || isAdmin();
+    }
+  }
+}
