@@ -6,6 +6,7 @@ import admin from "firebase-admin";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 dotenv.config();
 
@@ -42,6 +43,23 @@ async function startServer() {
   app.use(express.json());
 
   const PORT = parseInt(process.env.PORT || "3000");
+  const ML_BACKEND_URL = process.env.ML_BACKEND_URL || "http://localhost:8000";
+
+  // Proxy /api/ml/* → Python FastAPI ML backend (port 8000)
+  app.use(
+    "/api/ml",
+    createProxyMiddleware({
+      target: ML_BACKEND_URL,
+      changeOrigin: true,
+      pathRewrite: { "^/api/ml": "" },
+      on: {
+        error: (err: any, _req: any, res: any) => {
+          console.error("[ML Proxy] Error:", err.message);
+          (res as any).status(503).json({ error: "ML backend unavailable", detail: err.message });
+        },
+      },
+    })
+  );
 
   // API Routes
   

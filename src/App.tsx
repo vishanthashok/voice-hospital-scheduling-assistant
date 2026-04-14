@@ -117,6 +117,14 @@ export default function App() {
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [timeframe, setTimeframe] = useState<"24h" | "7d" | "30d">("30d");
 
+  // ML state
+  const [mlScores, setMlScores] = useState<Record<string, { risk_score: number; risk_band: string; priority: string; confidence: number }>>({});
+  const [mlLoading, setMlLoading] = useState(false);
+  const [modelInfo, setModelInfo] = useState<any>(null);
+  const [mlError, setMlError] = useState<string | null>(null);
+  const [slotRec, setSlotRec] = useState<{ patientId: string; slots: any[] } | null>(null);
+
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -191,6 +199,53 @@ export default function App() {
       console.error("Error adding manual entry", error);
     }
   };
+
+  // ── ML helpers ──────────────────────────────────────────────────
+  const recalculateRisk = async () => {
+    setMlLoading(true);
+    setMlError(null);
+    try {
+      const resp = await fetch("/api/ml/batch/seed", { method: "POST" });
+      if (!resp.ok) throw new Error(`ML server returned ${resp.status}`);
+      const data = await resp.json();
+      const map: Record<string, any> = {};
+      data.results.forEach((r: any) => { map[r.id] = r; });
+      setMlScores(map);
+    } catch (err: any) {
+      setMlError(err.message || "ML backend unreachable");
+    } finally {
+      setMlLoading(false);
+    }
+  };
+
+  const fetchModelInfo = async () => {
+    try {
+      const resp = await fetch("/api/ml/model/info");
+      if (resp.ok) setModelInfo(await resp.json());
+    } catch { /* silent */ }
+  };
+
+  const recommendSlot = async (patient: PatientRecord) => {
+    try {
+      const daysSince = Math.floor((Date.now() - new Date(patient.lastVisit).getTime()) / 86400000);
+      const urgency   = patient.priority === "High" ? 4 : patient.priority === "Medium" ? 3 : 1;
+      const resp = await fetch("/api/ml/recommend/slot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          age: patient.age, gender: patient.gender, condition: patient.condition,
+          urgency, days_since_visit: daysSince, insurance: patient.insurance,
+          language: patient.language, preferred_doctor: patient.doctor,
+        }),
+      });
+      if (!resp.ok) throw new Error("Slot recommendation failed");
+      const data = await resp.json();
+      setSlotRec({ patientId: patient.id, slots: data.top_slots });
+    } catch (err: any) {
+      alert("Slot recommendation error: " + err.message);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -599,7 +654,19 @@ export default function App() {
                       <h3 className="text-2xl font-black tracking-tight text-white">All Patients</h3>
                       <p className="text-sm text-slate-500 mt-1">{mockPatients.length} records · Extended dataset</p>
                     </div>
-                    <div className="flex gap-4">
+                    <div className="flex gap-3 items-center">
+                      {mlError && <span className="text-xs text-rose-400 font-bold">{mlError}</span>}
+                      {Object.keys(mlScores).length > 0 && (
+                        <span className="text-xs text-emerald-400 font-bold px-3 py-1 bg-emerald-500/10 rounded-lg border border-emerald-500/20">✓ ML Scores Active</span>
+                      )}
+                      <button
+                        onClick={recalculateRisk}
+                        disabled={mlLoading}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl font-bold text-sm transition shadow-[0_0_10px_rgba(59,130,246,0.2)] active:scale-95 flex items-center gap-2"
+                      >
+                        <Zap className={`w-4 h-4 ${mlLoading ? 'animate-spin' : ''}`} />
+                        {mlLoading ? 'Calculating...' : 'Recalculate Risk (ML)'}
+                      </button>
                       <button className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 transition text-sm">Export CSV</button>
                     </div>
                   </div>
@@ -632,16 +699,34 @@ export default function App() {
                             </td>
                             <td className="px-6 py-6 text-center">
                               <div className="flex flex-col items-center gap-1">
-                                <span className={`text-sm font-black ${
-                                  patient.riskScore >= 75 ? 'text-red-400' :
-                                  patient.riskScore >= 40 ? 'text-amber-400' : 'text-emerald-400'
-                                }`}>{patient.riskScore}</span>
-                                <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                  <div className={`h-full rounded-full ${
-                                    patient.riskScore >= 75 ? 'bg-red-500' :
-                                    patient.riskScore >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
-                                  }`} style={{ width: `${patient.riskScore}%` }} />
-                                </div>
+                                {mlScores[patient.id] ? (
+                                  <>
+                                    <span className={`text-sm font-black ${
+                                      mlScores[patient.id].risk_score >= 75 ? 'text-red-400' :
+                                      mlScores[patient.id].risk_score >= 40 ? 'text-amber-400' : 'text-emerald-400'
+                                    }`}>{mlScores[patient.id].risk_score}</span>
+                                    <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                      <div className={`h-full rounded-full ${
+                                        mlScores[patient.id].risk_score >= 75 ? 'bg-red-500' :
+                                        mlScores[patient.id].risk_score >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
+                                      }`} style={{ width: `${mlScores[patient.id].risk_score}%` }} />
+                                    </div>
+                                    <span className="text-[9px] text-blue-400 font-black uppercase tracking-wider">ML</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className={`text-sm font-black ${
+                                      patient.riskScore >= 75 ? 'text-red-400' :
+                                      patient.riskScore >= 40 ? 'text-amber-400' : 'text-emerald-400'
+                                    }`}>{patient.riskScore}</span>
+                                    <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                      <div className={`h-full rounded-full ${
+                                        patient.riskScore >= 75 ? 'bg-red-500' :
+                                        patient.riskScore >= 40 ? 'bg-amber-500' : 'bg-emerald-500'
+                                      }`} style={{ width: `${patient.riskScore}%` }} />
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             </td>
                             <td className="px-6 py-6">
@@ -660,17 +745,26 @@ export default function App() {
                                 patient.priority === "Medium" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
                                   "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
                                 }`}>
-                                {patient.priority}
+                                {mlScores[patient.id] ? mlScores[patient.id].priority : patient.priority}
                               </div>
                             </td>
                             <td className="px-6 py-6 text-right">
-                              <span className={`font-bold text-sm ${
-                                patient.status === "Scheduled" ? "text-emerald-400" :
-                                patient.status === "In Call Queue" ? "text-blue-400" :
-                                patient.status === "Completed" ? "text-slate-400" :
-                                patient.status === "Needs Follow-up" ? "text-amber-400" :
-                                "text-rose-400"
-                              }`}>{patient.status}</span>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => recommendSlot(patient)}
+                                  title="Suggest best appointment slot"
+                                  className="p-2 bg-slate-800 border border-slate-700 text-slate-400 rounded-xl hover:bg-blue-600 hover:text-white hover:border-blue-500 transition-all text-xs font-bold"
+                                >
+                                  <Calendar className="w-4 h-4" />
+                                </button>
+                                <span className={`font-bold text-sm ${
+                                  patient.status === "Scheduled" ? "text-emerald-400" :
+                                  patient.status === "In Call Queue" ? "text-blue-400" :
+                                  patient.status === "Completed" ? "text-slate-400" :
+                                  patient.status === "Needs Follow-up" ? "text-amber-400" :
+                                  "text-rose-400"
+                                }`}>{patient.status}</span>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -735,8 +829,104 @@ export default function App() {
 
                   {/* Real-time Logs */}
                   <div className="xl:col-span-2 space-y-6">
-                    <h3 className="text-xl font-black tracking-tight text-white">Live Event Stream</h3>
-                    <div className="bg-[#0A0F1C] rounded-[2.5rem] p-8 shadow-2xl overflow-hidden h-[700px] flex flex-col border border-slate-800 relative group">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-black tracking-tight text-white">Live Event Stream</h3>
+                      <button
+                        onClick={() => { fetchModelInfo(); }}
+                        className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-sm hover:bg-slate-700 transition flex items-center gap-2"
+                      >
+                        <Cpu className="w-4 h-4 text-blue-400" />
+                        ML Model Stats
+                      </button>
+                    </div>
+
+                    {/* ML Model Stats Panel */}
+                    {modelInfo && (
+                      <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-6 space-y-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="font-black text-white text-lg">Model Performance</h4>
+                          <button onClick={() => setModelInfo(null)} className="text-slate-600 hover:text-slate-400 text-xs">✕ close</button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-slate-950 rounded-2xl p-4 border border-slate-800">
+                            <p className="text-xs font-black text-blue-400 uppercase tracking-widest mb-3">Risk Model (Random Forest)</p>
+                            <div className="space-y-2">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">MAE</span>
+                                <span className="text-white font-bold text-sm">{modelInfo.risk_model.mae ?? 'cached'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">R² Score</span>
+                                <span className="text-emerald-400 font-bold text-sm">{modelInfo.risk_model.r2_score ?? 'cached'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">Training Rows</span>
+                                <span className="text-white font-bold text-sm">{modelInfo.risk_model.training_rows ?? '—'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">Train Time</span>
+                                <span className="text-slate-300 font-bold text-sm">{modelInfo.risk_model.train_time_sec ?? '—'}s</span>
+                              </div>
+                            </div>
+                            {modelInfo.risk_model.feature_importance && (
+                              <div className="mt-4 pt-3 border-t border-slate-800">
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Feature Importance</p>
+                                {Object.entries(modelInfo.risk_model.feature_importance).map(([k, v]: any) => (
+                                  <div key={k} className="flex items-center gap-2 mb-1">
+                                    <span className="text-slate-600 text-[11px] w-32 truncate">{k}</span>
+                                    <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
+                                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(v * 100).toFixed(0)}%` }} />
+                                    </div>
+                                    <span className="text-slate-400 text-[11px] w-8 text-right">{(v * 100).toFixed(0)}%</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="bg-slate-950 rounded-2xl p-4 border border-slate-800">
+                            <p className="text-xs font-black text-emerald-400 uppercase tracking-widest mb-3">Priority Model (Gradient Boost)</p>
+                            <div className="space-y-2">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">Accuracy</span>
+                                <span className="text-emerald-400 font-bold text-sm">{modelInfo.priority_model.accuracy ? `${(modelInfo.priority_model.accuracy * 100).toFixed(1)}%` : 'cached'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">CV Mean Acc</span>
+                                <span className="text-white font-bold text-sm">{modelInfo.priority_model.cv_mean_accuracy ? `${(modelInfo.priority_model.cv_mean_accuracy * 100).toFixed(1)}%` : '—'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">CV Std</span>
+                                <span className="text-slate-300 font-bold text-sm">{modelInfo.priority_model.cv_std ?? '—'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 text-sm">Train Time</span>
+                                <span className="text-slate-300 font-bold text-sm">{modelInfo.priority_model.train_time_sec ?? '—'}s</span>
+                              </div>
+                            </div>
+                            {modelInfo.priority_model.per_class_f1 && (
+                              <div className="mt-4 pt-3 border-t border-slate-800">
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Per-Class F1</p>
+                                {Object.entries(modelInfo.priority_model.per_class_f1).map(([cls, f1]: any) => (
+                                  <div key={cls} className="flex items-center gap-2 mb-1">
+                                    <span className={`text-[11px] font-bold w-16 ${
+                                      cls === 'High' ? 'text-red-400' : cls === 'Medium' ? 'text-amber-400' : 'text-emerald-400'
+                                    }`}>{cls}</span>
+                                    <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
+                                      <div className={`h-full rounded-full ${
+                                        cls === 'High' ? 'bg-red-500' : cls === 'Medium' ? 'bg-amber-500' : 'bg-emerald-500'
+                                      }`} style={{ width: `${(f1 * 100).toFixed(0)}%` }} />
+                                    </div>
+                                    <span className="text-slate-400 text-[11px] w-8 text-right">{(f1 * 100).toFixed(0)}%</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="bg-[#0A0F1C] rounded-[2.5rem] p-8 shadow-2xl overflow-hidden h-[500px] flex flex-col border border-slate-800 relative group">
                       <div className="absolute inset-0 bg-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
 
                       <div className="flex items-center gap-3 mb-6 text-slate-500 font-mono text-xs border-b border-slate-800/50 pb-4 relative z-10">
@@ -836,6 +1026,67 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Slot Recommendation Modal */}
+      <AnimatePresence>
+        {slotRec && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
+              onClick={() => setSlotRec(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 max-w-xl w-full relative z-10 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <div>
+                  <p className="text-xs font-black text-blue-400 uppercase tracking-widest mb-1">ML Slot Recommender</p>
+                  <h3 className="text-2xl font-black text-white">Top 3 Slots</h3>
+                  <p className="text-slate-400 text-sm">For patient {slotRec.patientId} — ranked by urgency, risk & availability</p>
+                </div>
+                <button onClick={() => setSlotRec(null)} className="p-2 bg-slate-800 text-slate-400 rounded-xl hover:text-white transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="space-y-4">
+                {slotRec.slots.map((slot: any, i: number) => (
+                  <div key={slot.slot_id} className={`p-5 rounded-2xl border flex items-center gap-5 ${
+                    i === 0 ? 'bg-blue-500/5 border-blue-500/20' : 'bg-slate-950 border-slate-800'
+                  }`}>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-lg shrink-0 ${
+                      i === 0 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}>#{i + 1}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-3">
+                        <p className="font-bold text-white">{slot.day} · {slot.time}</p>
+                        {i === 0 && <span className="text-[10px] font-black uppercase text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-lg border border-blue-500/20">Best Match</span>}
+                      </div>
+                      <p className="text-sm text-slate-400 mt-0.5">{slot.doctor} · Load: {slot.doctor_load}</p>
+                      <div className="flex gap-4 mt-2">
+                        <span className="text-[11px] text-slate-600">Score: <span className="text-slate-300 font-bold">{slot.score}</span></span>
+                        <span className="text-[11px] text-slate-600">Urgency: <span className="text-amber-400 font-bold">{slot.reasoning.urgency_score}</span></span>
+                        <span className="text-[11px] text-slate-600">Risk: <span className="text-red-400 font-bold">{slot.reasoning.risk_contrib}</span></span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { setSlotRec(null); setActiveView("schedule"); }}
+                      className="p-2 bg-slate-800 text-slate-400 rounded-xl hover:bg-blue-600 hover:text-white transition shrink-0"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </motion.div>
           </div>
         )}
