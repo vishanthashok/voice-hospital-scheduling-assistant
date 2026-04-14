@@ -115,6 +115,7 @@ export default function App() {
   const [isDeveloperMode, setIsDeveloperMode] = useState(false);
 
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [timeframe, setTimeframe] = useState<"24h" | "7d" | "30d">("30d");
 
   // ML state
@@ -183,20 +184,42 @@ export default function App() {
 
   const handleManualEntry = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+    if (isSubmitting) return;
+
+    const form = e.currentTarget;
+    const formData = new FormData(form);
+    const name = formData.get("name") as string;
+    const phone = formData.get("phone") as string;
+    const reason = formData.get("reason") as string;
+    const urgencyStr = formData.get("urgency") as string;
+    const time = formData.get("time") as string;
+
+    // Basic validation
+    if (!name || !phone || !reason || !time) {
+      alert("Please fill in all required fields.");
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
       await addDoc(collection(db, "appointments"), {
-        patientName: formData.get("name"),
-        patientPhone: formData.get("phone"),
-        reason: formData.get("reason"),
-        urgency: parseInt(formData.get("urgency") as string),
-        preferredTime: formData.get("time"),
+        patientName: name,
+        patientPhone: phone,
+        reason: reason,
+        urgency: parseInt(urgencyStr) || 3,
+        preferredTime: time,
         status: "pending",
         createdAt: new Date().toISOString()
       });
+
+      // Reset form and close modal on success
+      form.reset();
       setIsManualEntryOpen(false);
     } catch (error) {
-      console.error("Error adding manual entry", error);
+      console.error("Error adding manual entry:", error);
+      alert("Failed to save appointment. Please check your connection and try again.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1012,8 +1035,20 @@ export default function App() {
                 </div>
 
                 <div className="pt-4">
-                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-xl shadow-[0_0_15px_rgba(37,99,235,0.3)] transition transform active:scale-95">
-                    Save Appointment
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className={`w-full font-bold py-4 rounded-xl shadow-[0_0_15px_rgba(37,99,235,0.3)] transition transform active:scale-95 flex items-center justify-center gap-2 ${isSubmitting ? 'bg-blue-800 cursor-not-allowed opacity-80' : 'bg-blue-600 hover:bg-blue-500 text-white'
+                      }`}
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      "Save Appointment"
+                    )}
                   </button>
                 </div>
               </form>
