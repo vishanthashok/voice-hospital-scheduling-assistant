@@ -123,6 +123,26 @@ async function startServer() {
     })
   );
 
+  // Proxy /api/scheduling/* -> FastAPI scheduling backend (port 8001 by default)
+  app.use(
+    "/api/scheduling",
+    createProxyMiddleware({
+      target: SCHEDULING_API_URL,
+      changeOrigin: true,
+      pathRewrite: { "^/api/scheduling": "" },
+      on: {
+        error: (err: any, _req: any, res: any) => {
+          console.error("[Scheduling Proxy] Error:", err.message);
+          (res as any).status(503).json({
+            error: "Scheduling backend unavailable",
+            detail: err.message,
+            target: SCHEDULING_API_URL,
+          });
+        },
+      },
+    })
+  );
+
   // API Routes
 
   // Twilio Voice Webhook -> FastAPI conversation pipeline

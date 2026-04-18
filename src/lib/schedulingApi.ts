@@ -11,7 +11,7 @@ function apiBase(): string {
   if (mlOrigin) {
     return mlOrigin;
   }
-  return "http://localhost:8001";
+  return "/api/scheduling";
 }
 
 export function schedulingUrl(path: string): string {
