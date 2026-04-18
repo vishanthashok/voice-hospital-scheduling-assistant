@@ -78,6 +78,7 @@ cp .env.example .env
 - `GOOGLE_CALENDAR_ID`
 - `SMTP_SENDER_EMAIL`
 - `SMTP_APP_PASSWORD`
+- (Optional SMS) `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_SMS_ENABLED=true`
 
 5. Start FastAPI backend:
 
@@ -89,6 +90,25 @@ uvicorn app.main:app --reload --port 8001
 
 ```bash
 npm run dev
+```
+
+## Twilio SMS (optional)
+
+This repo can send **SMS confirmations** when an appointment is booked via the voice flow.
+
+- Set in `.env`:
+  - `TWILIO_SMS_ENABLED=true`
+  - `TWILIO_ACCOUNT_SID=...`
+  - `TWILIO_AUTH_TOKEN=...`
+  - `TWILIO_PHONE_NUMBER=+1...`
+- Trial accounts can only send to **verified** numbers and will include a trial banner.
+
+### SMS API endpoint (demo)
+
+```bash
+curl -X POST http://localhost:3000/api/sms/send \
+  -H "Content-Type: application/json" \
+  -d '{"to":"+1YOUR_NUMBER","body":"Your appointment is confirmed for tomorrow at 2 PM."}'
 ```
 
 ## API Endpoints
