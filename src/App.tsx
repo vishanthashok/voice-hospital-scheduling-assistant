@@ -23,9 +23,11 @@ import {
   ToggleLeft,
   ToggleRight,
   Stethoscope,
+  Send,
 } from "lucide-react";
 import { TriageDesk } from "./components/triage/TriageDesk";
 import { mlUrl } from "./lib/mlApi";
+import { fetchSchedulingMetrics, scheduleFromText } from "./lib/schedulingApi";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BarChart,
@@ -58,6 +60,13 @@ interface Log {
   event: string;
   data: any;
   timestamp: string;
+}
+
+interface SchedulingMetrics {
+  total_requests: number;
+  successful_bookings: number;
+  failed_attempts: number;
+  avg_response_time: number;
 }
 
 export interface PatientRecord {
@@ -127,6 +136,10 @@ export default function App() {
   const [modelInfo, setModelInfo] = useState<any>(null);
   const [mlError, setMlError] = useState<string | null>(null);
   const [slotRec, setSlotRec] = useState<{ patientId: string; slots: any[] } | null>(null);
+  const [schedulingMetrics, setSchedulingMetrics] = useState<SchedulingMetrics | null>(null);
+  const [schedulePrompt, setSchedulePrompt] = useState("Book Neha Patel with Dr. Patel next Friday afternoon for a diabetes follow-up. High urgency.");
+  const [scheduleResult, setScheduleResult] = useState<any | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
 
 
   useEffect(() => {
@@ -271,6 +284,40 @@ export default function App() {
       alert("Slot recommendation error: " + err.message);
     }
   };
+
+  const loadSchedulingMetrics = async () => {
+    try {
+      const metrics = await fetchSchedulingMetrics();
+      setSchedulingMetrics(metrics);
+    } catch {
+      // Keep dashboard resilient if API is offline.
+    }
+  };
+
+  const handleRunScheduling = async () => {
+    if (!schedulePrompt.trim() || scheduleLoading) return;
+    setScheduleLoading(true);
+    try {
+      const result = await scheduleFromText({
+        text: schedulePrompt,
+        session_id: `dev-${Date.now()}`,
+        patient_email: "test.patient@gmail.com",
+      });
+      setScheduleResult(result);
+      await loadSchedulingMetrics();
+    } catch (err: any) {
+      setScheduleResult({ status: "failed", message: err?.message ?? "Request failed" });
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeView !== "developer") return;
+    loadSchedulingMetrics();
+    const id = window.setInterval(loadSchedulingMetrics, 10000);
+    return () => window.clearInterval(id);
+  }, [activeView]);
 
 
   if (loading) {
@@ -868,6 +915,46 @@ export default function App() {
                         <Cpu className="w-4 h-4 text-blue-400" />
                         ML Model Stats
                       </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      {[
+                        { label: "Total Requests", value: schedulingMetrics?.total_requests ?? 0 },
+                        { label: "Booked", value: schedulingMetrics?.successful_bookings ?? 0 },
+                        { label: "Failed", value: schedulingMetrics?.failed_attempts ?? 0 },
+                        { label: "Avg Latency", value: `${(schedulingMetrics?.avg_response_time ?? 0).toFixed(2)}s` },
+                      ].map((item) => (
+                        <div key={item.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                          <p className="text-[11px] uppercase tracking-widest text-slate-500 font-black">{item.label}</p>
+                          <p className="text-2xl font-black text-white mt-2">{item.value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-6 space-y-4">
+                      <h4 className="text-white font-black text-lg">Pipeline Dry Run</h4>
+                      <p className="text-slate-400 text-sm">Test Speech→Intent→Scheduling pipeline using a natural-language prompt and inspect structured output.</p>
+                      <div className="flex gap-3">
+                        <input
+                          value={schedulePrompt}
+                          onChange={(e) => setSchedulePrompt(e.target.value)}
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none"
+                          placeholder="Describe scheduling intent..."
+                        />
+                        <button
+                          onClick={handleRunScheduling}
+                          disabled={scheduleLoading}
+                          className="px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 rounded-xl text-white font-bold flex items-center gap-2"
+                        >
+                          <Send className={`w-4 h-4 ${scheduleLoading ? "animate-pulse" : ""}`} />
+                          {scheduleLoading ? "Running..." : "Execute"}
+                        </button>
+                      </div>
+                      {scheduleResult && (
+                        <pre className="text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-xl p-4 overflow-x-auto">
+                          {JSON.stringify(scheduleResult, null, 2)}
+                        </pre>
+                      )}
                     </div>
 
                     {/* ML Model Stats Panel */}

@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:api": "uvicorn app.main:app --reload --port 8001",
     "start": "NODE_ENV=production tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:api": "pytest tests -q"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

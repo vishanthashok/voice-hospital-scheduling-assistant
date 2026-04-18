@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+python-multipart
+openai
+google-api-python-client
+google-auth
+python-dotenv
+python-dateutil
+email-validator
+pytest
+httpx
