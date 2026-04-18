@@ -23,6 +23,15 @@ from models.slot_recommender import score_slots
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("medivoice-ml")
 
+# Comma-separated list, e.g. "https://medivoice.onrender.com,http://localhost:5173"
+# If unset, allow all origins (dev-friendly; set explicitly in production on Render).
+_cors_raw = os.getenv("CORS_ORIGINS", "").strip()
+_cors_origins: List[str] = (
+    [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    if _cors_raw
+    else ["*"]
+)
+
 # ── App setup ────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="MediVoice AI — ML Backend",
@@ -31,7 +40,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

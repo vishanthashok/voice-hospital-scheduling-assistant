@@ -13,7 +13,7 @@ export function ClinicalDrivers({
   const data: Row[] = contributions.map((c) => ({
     label: clinicalRationale[c.feature] ?? c.feature.replace(/_/g, " "),
     value: Math.abs(c.shap_value),
-    fill: c.shap_value >= 0 ? "#f43f5e" : "#10b981",
+    fill: c.direction === "decreases_risk" ? "#10b981" : "#e11d48",
   }));
 
   if (!data.length) {

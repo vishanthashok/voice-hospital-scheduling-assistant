@@ -25,6 +25,7 @@ import {
   Stethoscope,
 } from "lucide-react";
 import { TriageDesk } from "./components/triage/TriageDesk";
+import { mlUrl } from "./lib/mlApi";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BarChart,
@@ -230,7 +231,7 @@ export default function App() {
     setMlLoading(true);
     setMlError(null);
     try {
-      const resp = await fetch("/api/ml/batch/seed", { method: "POST" });
+      const resp = await fetch(mlUrl("/batch/seed"), { method: "POST" });
       if (!resp.ok) throw new Error(`ML server returned ${resp.status}`);
       const data = await resp.json();
       const map: Record<string, any> = {};
@@ -245,7 +246,7 @@ export default function App() {
 
   const fetchModelInfo = async () => {
     try {
-      const resp = await fetch("/api/ml/model/info");
+      const resp = await fetch(mlUrl("/model/info"));
       if (resp.ok) setModelInfo(await resp.json());
     } catch { /* silent */ }
   };
@@ -253,8 +254,8 @@ export default function App() {
   const recommendSlot = async (patient: PatientRecord) => {
     try {
       const daysSince = Math.floor((Date.now() - new Date(patient.lastVisit).getTime()) / 86400000);
-      const urgency = patient.priority === "High" ? 4 : patient.priority === "Medium" ? 3 : 1;
-      const resp = await fetch("/api/ml/recommend/slot", {
+      const urgency = patient.priority === "High" ? 4 : patient.priority === "Medium" ? 3 : 2;
+      const resp = await fetch(mlUrl("/recommend/slot"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

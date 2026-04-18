@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Brain, Download, FileJson, RefreshCw, Shield } from "lucide-react";
+import { Brain, Download, FileJson, RefreshCw } from "lucide-react";
 import type { PatientRecord } from "../../App";
-import { ClinicalDrivers } from "./ClinicalDrivers";
 import { RiskGauge } from "./RiskGauge";
 import type { RiskWithShap } from "../../lib/mlApi";
-import { downloadJson, fetchFhirRiskAssessment } from "../../lib/mlApi";
+import { handleDownloadFHIR } from "../../lib/mlApi";
+import { AiLogicModal } from "./AiLogicModal";
 
 function pLevel(band: string, mlPriority: string): { tag: string; sub: string; ring: string } {
   if (band === "Critical")
@@ -21,14 +21,20 @@ export function PatientTriageCard({
   patient,
   risk,
   loading,
-  onRefresh,
+  onRefreshRisk,
+  onRetrain,
+  retraining,
 }: {
   patient: PatientRecord;
   risk: RiskWithShap | null;
   loading: boolean;
-  onRefresh: () => void;
+  /** Re-fetch risk + slots after models or data change */
+  onRefreshRisk: () => Promise<void>;
+  /** Retrain RF + GB models (GET /model/retrain), then caller refreshes risk */
+  onRetrain: () => Promise<void>;
+  retraining: boolean;
 }) {
-  const [flipped, setFlipped] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const score = risk?.risk_score ?? patient.riskScore;
@@ -43,32 +49,26 @@ export function PatientTriageCard({
     Math.floor((Date.now() - new Date(patient.lastVisit).getTime()) / 86400000)
   );
 
-  const handleFhir = async () => {
+  const onDownloadFhir = async () => {
     setExporting(true);
     try {
-      const doc = await fetchFhirRiskAssessment(patient, daysSince);
-      downloadJson(`RiskAssessment-${patient.id}.json`, doc);
+      await handleDownloadFHIR(patient, daysSince);
     } catch (e) {
       console.error(e);
-      alert("FHIR export failed — is the ML backend running?");
+      alert(
+        e instanceof Error
+          ? e.message
+          : "FHIR export failed. If the backend was asleep (Render free tier), wait ~30s and retry."
+      );
     } finally {
       setExporting(false);
     }
   };
 
   return (
-    <motion.div layout className="w-full max-w-xl mx-auto" style={{ perspective: 1200 }}>
-      <motion.div
-        animate={{ rotateY: flipped ? 180 : 0 }}
-        transition={{ duration: 0.55, ease: [0.2, 0.8, 0.2, 1] }}
-        className="relative min-h-[440px] w-full"
-        style={{ transformStyle: "preserve-3d" }}
-      >
-        {/* Front */}
-        <div
-          className="absolute inset-0 p-8 rounded-3xl border border-slate-800 bg-slate-900/80 backdrop-blur-sm flex flex-col gap-6"
-          style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}
-        >
+    <>
+      <motion.div layout className="w-full max-w-xl mx-auto">
+        <div className="p-8 rounded-3xl border border-slate-800 bg-slate-900/80 backdrop-blur-sm flex flex-col gap-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Patient · FHIR</p>
@@ -99,7 +99,7 @@ export function PatientTriageCard({
           <div className="flex flex-wrap gap-3 pt-2">
             <button
               type="button"
-              onClick={() => setFlipped(true)}
+              onClick={() => setAiModalOpen(true)}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-sm font-bold hover:bg-slate-700 transition-colors"
             >
               <Brain className="w-4 h-4 text-violet-400" />
@@ -107,16 +107,25 @@ export function PatientTriageCard({
             </button>
             <button
               type="button"
-              onClick={onRefresh}
-              disabled={loading}
+              onClick={() => void onRetrain()}
+              disabled={retraining || loading}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-700 text-slate-300 text-sm font-bold hover:bg-slate-800 disabled:opacity-50"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-              Refresh ML
+              <RefreshCw className={`w-4 h-4 ${retraining ? "animate-spin" : ""}`} />
+              {retraining ? "Retraining…" : "Refresh ML"}
             </button>
             <button
               type="button"
-              onClick={handleFhir}
+              onClick={() => void onRefreshRisk()}
+              disabled={loading || retraining}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-600 text-slate-400 text-sm font-bold hover:bg-slate-800 disabled:opacity-50 text-xs"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+              Refresh scores
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDownloadFhir()}
               disabled={exporting}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 text-sm font-bold hover:bg-emerald-600/30"
             >
@@ -126,43 +135,19 @@ export function PatientTriageCard({
           </div>
           <p className="text-[10px] text-slate-600 flex items-center gap-1">
             <FileJson className="w-3 h-3" />
-            Exports HL7 FHIR R4 <code className="text-slate-500">RiskAssessment</code> JSON (interoperable)
+            HL7 FHIR R4 <code className="text-slate-500">RiskAssessment</code> JSON ·{" "}
+            <code className="text-slate-600">VITE_ML_BACKEND_URL</code> for Render
           </p>
         </div>
-
-        {/* Back */}
-        <div
-          className="absolute inset-0 p-8 rounded-3xl bg-slate-900 border border-violet-500/20 flex flex-col"
-          style={{
-            backfaceVisibility: "hidden",
-            WebkitBackfaceVisibility: "hidden",
-            transform: "rotateY(180deg)",
-          }}
-        >
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2 text-violet-400">
-              <Shield className="w-5 h-5" />
-              <span className="font-bold text-white text-sm">Explainable output</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setFlipped(false)}
-              className="text-xs font-bold text-slate-500 hover:text-white uppercase tracking-wider"
-            >
-              ← Back
-            </button>
-          </div>
-          {risk ? (
-            <ClinicalDrivers
-              contributions={risk.top_shap_contributions}
-              clinicalRationale={risk.clinical_rationale}
-            />
-          ) : (
-            <p className="text-slate-500 text-sm">Load risk prediction first.</p>
-          )}
-        </div>
       </motion.div>
-    </motion.div>
+
+      <AiLogicModal
+        open={aiModalOpen}
+        onClose={() => setAiModalOpen(false)}
+        patient={patient}
+        daysSince={daysSince}
+      />
+    </>
   );
 }
 

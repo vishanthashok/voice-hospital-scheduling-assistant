@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { ChevronDown, Stethoscope } from "lucide-react";
 import type { PatientRecord } from "../../App";
-import { fetchRiskWithShap, fetchSlotRecommend, type RiskWithShap } from "../../lib/mlApi";
+import { fetchRetrainModels, fetchRiskWithShap, fetchSlotRecommend, type RiskWithShap } from "../../lib/mlApi";
 import { PatientTriageCard } from "./PatientTriageCard";
 import { TriageSidebar } from "./TriageSidebar";
 import { SuggestedSlotsPanel } from "./SuggestedSlotsPanel";
@@ -16,6 +16,8 @@ const scheduleSlots = [
   { time: "2:00 PM", mon: null, tue: "P014", wed: "P015", thu: null, fri: "P001" },
   { time: "3:00 PM", mon: "P007", tue: null, wed: "P006", thu: "P009", fri: null },
 ];
+
+type Toast = { type: "success" | "error"; message: string };
 
 export function TriageDesk({
   patients,
@@ -34,7 +36,9 @@ export function TriageDesk({
     patient_summary: Record<string, unknown>;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [retraining, setRetraining] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
 
   const daysSince = selected
     ? Math.max(0, Math.floor((Date.now() - new Date(selected.lastVisit).getTime()) / 86400000))
@@ -64,6 +68,33 @@ export function TriageDesk({
     void refresh();
   }, [selectedId, refresh]);
 
+  const retrainAndRefresh = useCallback(async () => {
+    setRetraining(true);
+    setToast(null);
+    setErr(null);
+    const ac = new AbortController();
+    const timer = window.setTimeout(() => ac.abort(), 180000);
+    try {
+      await fetchRetrainModels(ac.signal);
+      await refresh();
+      setToast({ type: "success", message: "Models retrained. Risk gauge and slots updated." });
+      window.setTimeout(() => setToast(null), 5000);
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error && e.name === "AbortError"
+          ? "Retrain timed out — Render free tier may be waking (~30s). Retry."
+          : e instanceof Error
+            ? e.message
+            : "Retrain failed";
+      setToast({ type: "error", message: msg });
+      setErr(msg);
+      window.setTimeout(() => setToast(null), 8000);
+    } finally {
+      clearTimeout(timer);
+      setRetraining(false);
+    }
+  }, [refresh]);
+
   const heat = useMemo(
     () => buildHeatFromSchedule(scheduleSlots as Array<Record<string, string | null>>, getPatientById),
     [getPatientById]
@@ -79,6 +110,24 @@ export function TriageDesk({
       animate={{ opacity: 1 }}
       className="flex flex-col xl:flex-row gap-8 max-w-[1400px] mx-auto"
     >
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            className={`fixed bottom-6 right-6 z-[90] max-w-sm rounded-xl border px-4 py-3 text-sm font-medium shadow-lg ${
+              toast.type === "success"
+                ? "border-emerald-500/40 bg-emerald-950/90 text-emerald-100"
+                : "border-rose-500/40 bg-rose-950/90 text-rose-100"
+            }`}
+            role="status"
+          >
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <TriageSidebar queue={incoming} />
 
       <div className="flex-1 min-w-0 space-y-8">
@@ -89,7 +138,9 @@ export function TriageDesk({
               <span className="text-xs font-black uppercase tracking-widest">MediVoice · Triage Desk</span>
             </div>
             <h2 className="text-3xl font-black text-white tracking-tight">Patient-centered triage</h2>
-            <p className="text-slate-400 mt-1 text-sm">Explainable ML · FHIR · load-aware scheduling</p>
+            <p className="text-slate-400 mt-1 text-sm">
+              Set <code className="text-slate-500">VITE_ML_BACKEND_URL</code> on Render for the ML service.
+            </p>
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-400">
             <span className="font-bold text-slate-500">Active chart</span>
@@ -110,13 +161,20 @@ export function TriageDesk({
           </label>
         </div>
 
-        {err && (
+        {err && !retraining && (
           <div className="rounded-xl border border-rose-600/40 bg-rose-950/30 px-4 py-3 text-sm text-rose-300">
-            {err} — start ML backend on port 8000.
+            {err}
           </div>
         )}
 
-        <PatientTriageCard patient={selected} risk={risk} loading={loading} onRefresh={refresh} />
+        <PatientTriageCard
+          patient={selected}
+          risk={risk}
+          loading={loading}
+          onRefreshRisk={refresh}
+          onRetrain={retrainAndRefresh}
+          retraining={retraining}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <SuggestedSlotsPanel
