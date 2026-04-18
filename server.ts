@@ -115,6 +115,18 @@ async function startServer() {
       changeOrigin: true,
       pathRewrite: { "^/api/ml": "" },
       on: {
+        proxyReq: (proxyReq: any, req: any) => {
+          // express.json() consumes the stream; re-stream JSON body to the target.
+          const body = req?.body;
+          if (!body) return;
+          const method = String(req?.method || "").toUpperCase();
+          if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return;
+          if (typeof body !== "object") return;
+          const bodyData = JSON.stringify(body);
+          proxyReq.setHeader("Content-Type", "application/json");
+          proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
+          proxyReq.write(bodyData);
+        },
         error: (err: any, _req: any, res: any) => {
           console.error("[ML Proxy] Error:", err.message);
           (res as any).status(503).json({ error: "ML backend unavailable", detail: err.message });
@@ -131,6 +143,18 @@ async function startServer() {
       changeOrigin: true,
       pathRewrite: { "^/api/scheduling": "" },
       on: {
+        proxyReq: (proxyReq: any, req: any) => {
+          // express.json() consumes the stream; re-stream JSON body to the target.
+          const body = req?.body;
+          if (!body) return;
+          const method = String(req?.method || "").toUpperCase();
+          if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return;
+          if (typeof body !== "object") return;
+          const bodyData = JSON.stringify(body);
+          proxyReq.setHeader("Content-Type", "application/json");
+          proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
+          proxyReq.write(bodyData);
+        },
         error: (err: any, _req: any, res: any) => {
           console.error("[Scheduling Proxy] Error:", err.message);
           (res as any).status(503).json({
