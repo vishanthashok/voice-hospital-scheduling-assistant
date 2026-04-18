@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { auth, db, loginWithGoogle, logout } from "./firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { collection, query, orderBy, onSnapshot, limit, addDoc } from "firebase/firestore";
@@ -21,8 +21,10 @@ import {
   Bell,
   X,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
+  Stethoscope,
 } from "lucide-react";
+import { TriageDesk } from "./components/triage/TriageDesk";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BarChart,
@@ -103,7 +105,7 @@ const scheduleSlots = [
 
 const getPatientById = (id: string | null) => id ? mockPatients.find(p => p.id === id) : null;
 
-type View = "dashboard" | "schedule" | "patients" | "developer";
+type View = "triage" | "dashboard" | "schedule" | "patients" | "developer";
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -111,7 +113,7 @@ export default function App() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [activeView, setActiveView] = useState<View>("dashboard");
+  const [activeView, setActiveView] = useState<View>("triage");
   const [isDeveloperMode, setIsDeveloperMode] = useState(false);
 
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
@@ -182,7 +184,7 @@ export default function App() {
     value: a.urgency
   }));
 
-  const handleManualEntry = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleManualEntry = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isSubmitting) return;
 
@@ -339,6 +341,7 @@ export default function App() {
         </div>
 
         <nav className="flex-1 space-y-3">
+          <NavItem id="triage" icon={Stethoscope} label="Triage Desk" />
           <NavItem id="dashboard" icon={LayoutDashboard} label="Overview" />
           <NavItem id="schedule" icon={Calendar} label="Calendar" />
           <NavItem id="patients" icon={UserIcon} label="Patients" />
@@ -407,6 +410,16 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto p-10 scroll-smooth custom-scrollbar relative">
           <AnimatePresence mode="wait">
+            {activeView === "triage" && (
+              <motion.div
+                key="triage"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+              >
+                <TriageDesk patients={mockPatients} getPatientById={getPatientById} />
+              </motion.div>
+            )}
             {activeView === "dashboard" && (
               <motion.div
                 key="dashboard"
@@ -1096,10 +1109,17 @@ export default function App() {
                         {i === 0 && <span className="text-[10px] font-black uppercase text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-lg border border-blue-500/20">Best Match</span>}
                       </div>
                       <p className="text-sm text-slate-400 mt-0.5">{slot.doctor} · Load: {slot.doctor_load}</p>
-                      <div className="flex gap-4 mt-2">
-                        <span className="text-[11px] text-slate-600">Score: <span className="text-slate-300 font-bold">{slot.score}</span></span>
-                        <span className="text-[11px] text-slate-600">Urgency: <span className="text-amber-400 font-bold">{slot.reasoning.urgency_score}</span></span>
-                        <span className="text-[11px] text-slate-600">Risk: <span className="text-red-400 font-bold">{slot.reasoning.risk_contrib}</span></span>
+                      <div className="flex flex-wrap gap-4 mt-2 text-[11px] text-slate-600">
+                        <span>Score: <span className="text-slate-300 font-bold">{slot.score}</span></span>
+                        {slot.reasoning?.objective_wait_hours != null && (
+                          <span>Wait proxy: <span className="text-emerald-400 font-bold">{Number(slot.reasoning.objective_wait_hours).toFixed(1)}h</span></span>
+                        )}
+                        {slot.reasoning?.urgency_score != null && (
+                          <span>Urgency: <span className="text-amber-400 font-bold">{slot.reasoning.urgency_score}</span></span>
+                        )}
+                        {slot.reasoning?.objective_total_cost != null && (
+                          <span>Cost: <span className="text-slate-300 font-bold">{Number(slot.reasoning.objective_total_cost).toFixed(2)}</span></span>
+                        )}
                       </div>
                     </div>
                     <button

@@ -6,16 +6,19 @@ from __future__ import annotations
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
+import asyncio
+import logging
+from typing import Dict, List, Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, List
-import logging
 
-from models.risk_model import RiskModel
+from data.seed_patients import CONDITION_LIST, SEED_PATIENTS
+from interop.fhir_risk_assessment import build_risk_assessment_fhir
 from models.priority_model import PriorityModel
+from models.risk_model import RiskModel
 from models.slot_recommender import score_slots
-from data.seed_patients import SEED_PATIENTS, encode_patient, CONDITION_LIST
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("medivoice-ml")
@@ -43,10 +46,10 @@ priority_metrics: dict = {}
 @app.on_event("startup")
 async def startup_event():
     global risk_metrics, priority_metrics
-    logger.info("🚀 MediVoice ML backend starting — training models...")
-    risk_metrics     = risk_model.train()
-    priority_metrics = priority_model.train()
-    logger.info("✅ All models ready.")
+    logger.info("MediVoice ML backend starting — training models...")
+    risk_metrics     = await asyncio.to_thread(risk_model.train)
+    priority_metrics = await asyncio.to_thread(priority_model.train)
+    logger.info("All models ready.")
 
 
 # ── Request/response schemas ─────────────────────────────────────────────────
@@ -61,9 +64,21 @@ class PatientFeatures(BaseModel):
     language:         Optional[str]   = Field("English", example="English")
     preferred_doctor: Optional[str]   = Field(None, example="Dr. Patel")
 
+class ShapFeatureItem(BaseModel):
+    feature: str
+    shap_value: float
+    direction: str
+
+
 class RiskResponse(BaseModel):
     risk_score: float
-    risk_band:  str    # "Low" | "Moderate" | "High" | "Critical"
+    risk_band: str  # "Low" | "Moderate" | "High" | "Critical"
+    clinical_rationale: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Top SHAP features → human-readable clinical copy",
+    )
+    top_shap_contributions: List[ShapFeatureItem] = Field(default_factory=list)
+
 
 class PriorityResponse(BaseModel):
     priority:      str
@@ -87,6 +102,15 @@ class BatchPatientIn(BaseModel):
     patients: List[PatientFeatures]
 
 
+class FhirRiskAssessmentRequest(BaseModel):
+    patient: PatientFeatures
+    patient_reference: str = Field(
+        "Patient/medivoice-demo-1",
+        description="FHIR Reference.reference for the subject Patient",
+    )
+    assessment_id: str = Field("medivoice-risk-1", description="Business id for RiskAssessment.id")
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def risk_band(score: float) -> str:
@@ -99,12 +123,12 @@ def risk_band(score: float) -> str:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/", tags=["Health"])
-def root():
+async def root():
     return {"status": "ok", "service": "MediVoice ML Backend v1.0.0"}
 
 
 @app.get("/health", tags=["Health"])
-def health():
+async def health():
     return {
         "status": "healthy",
         "risk_model_ready":     risk_model.model is not None,
@@ -113,33 +137,58 @@ def health():
 
 
 @app.post("/predict/risk", response_model=RiskResponse, tags=["Prediction"])
-def predict_risk(patient: PatientFeatures):
-    """Predict a patient's medical risk score (0–100)."""
+async def predict_risk(patient: PatientFeatures):
+    """Predict a patient's medical risk score (0–100) with SHAP-based rationale."""
     try:
-        score = risk_model.predict(
-            age=patient.age,
-            gender=patient.gender,
-            condition=patient.condition,
-            urgency=patient.urgency,
-            days_since_visit=patient.days_since_visit,
-            insurance=patient.insurance,
+        score = await asyncio.to_thread(
+            risk_model.predict,
+            patient.age,
+            patient.gender,
+            patient.condition,
+            patient.urgency,
+            patient.days_since_visit,
+            patient.insurance,
         )
-        return RiskResponse(risk_score=score, risk_band=risk_band(score))
+        expl = await asyncio.to_thread(
+            risk_model.get_explanation,
+            patient.age,
+            patient.gender,
+            patient.condition,
+            patient.urgency,
+            patient.days_since_visit,
+            patient.insurance,
+        )
+        tops = expl.get("top_contributions", [])
+        items = [
+            ShapFeatureItem(
+                feature=t["feature"],
+                shap_value=float(t["shap_value"]),
+                direction=str(t["direction"]),
+            )
+            for t in tops
+        ]
+        return RiskResponse(
+            risk_score=score,
+            risk_band=risk_band(score),
+            clinical_rationale=expl.get("clinical_rationale", {}),
+            top_shap_contributions=items,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/predict/priority", response_model=PriorityResponse, tags=["Prediction"])
-def predict_priority(patient: PatientFeatures):
+async def predict_priority(patient: PatientFeatures):
     """Classify a patient's triage priority: High / Medium / Low."""
     try:
-        result = priority_model.predict(
-            age=patient.age,
-            gender=patient.gender,
-            condition=patient.condition,
-            urgency=patient.urgency,
-            days_since_visit=patient.days_since_visit,
-            insurance=patient.insurance,
+        result = await asyncio.to_thread(
+            priority_model.predict,
+            patient.age,
+            patient.gender,
+            patient.condition,
+            patient.urgency,
+            patient.days_since_visit,
+            patient.insurance,
         )
         return PriorityResponse(**result)
     except Exception as e:
@@ -147,49 +196,100 @@ def predict_priority(patient: PatientFeatures):
 
 
 @app.post("/recommend/slot", response_model=SlotResponse, tags=["Scheduling"])
-def recommend_slot(patient: PatientFeatures):
-    """Return the top 3 appointment slots for a patient using ML-informed scoring."""
+async def recommend_slot(patient: PatientFeatures):
+    """Top 3 slots via OR-Tools CP-SAT (minimize wait × risk, burnout caps)."""
     try:
-        # Get ML outputs first
-        risk_score = risk_model.predict(
-            age=patient.age,
-            gender=patient.gender,
-            condition=patient.condition,
-            urgency=patient.urgency,
-            days_since_visit=patient.days_since_visit,
-            insurance=patient.insurance,
+        risk_score = await asyncio.to_thread(
+            risk_model.predict,
+            patient.age,
+            patient.gender,
+            patient.condition,
+            patient.urgency,
+            patient.days_since_visit,
+            patient.insurance,
         )
-        priority_res = priority_model.predict(
-            age=patient.age,
-            gender=patient.gender,
-            condition=patient.condition,
-            urgency=patient.urgency,
-            days_since_visit=patient.days_since_visit,
-            insurance=patient.insurance,
+        rb = risk_band(risk_score)
+        priority_res = await asyncio.to_thread(
+            priority_model.predict,
+            patient.age,
+            patient.gender,
+            patient.condition,
+            patient.urgency,
+            patient.days_since_visit,
+            patient.insurance,
         )
-        ranked = score_slots(
-            risk_score=risk_score,
-            priority=priority_res["priority"],
-            urgency=patient.urgency,
-            preferred_doctor=patient.preferred_doctor,
-            language=patient.language or "English",
+        ranked = await asyncio.to_thread(
+            score_slots,
+            risk_score,
+            priority_res["priority"],
+            patient.urgency,
+            patient.preferred_doctor,
+            patient.language or "English",
+            rb,
         )
         return SlotResponse(
             top_slots=[SlotRecommendation(**s) for s in ranked[:3]],
             patient_summary={
                 "ml_risk_score":    risk_score,
-                "ml_risk_band":     risk_band(risk_score),
+                "ml_risk_band":     rb,
                 "ml_priority":      priority_res["priority"],
                 "ml_confidence":    priority_res["confidence"],
-            }
+                "scheduler":      "OR-Tools CP-SAT (wait×risk objective, 2h burnout cap)",
+            },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/batch/score", tags=["Batch"])
-def batch_score(body: BatchPatientIn):
-    """Score all patients in a single request — powers the 'Recalculate Risk' button."""
+@app.post("/interop/fhir/RiskAssessment", tags=["Interop"])
+async def fhir_risk_assessment(body: FhirRiskAssessmentRequest):
+    """Serialize ML outputs + SHAP into a FHIR R4 RiskAssessment JSON resource."""
+    try:
+        p = body.patient
+        risk_score = await asyncio.to_thread(
+            risk_model.predict,
+            p.age,
+            p.gender,
+            p.condition,
+            p.urgency,
+            p.days_since_visit,
+            p.insurance,
+        )
+        expl = await asyncio.to_thread(
+            risk_model.get_explanation,
+            p.age,
+            p.gender,
+            p.condition,
+            p.urgency,
+            p.days_since_visit,
+            p.insurance,
+        )
+        prio = await asyncio.to_thread(
+            priority_model.predict,
+            p.age,
+            p.gender,
+            p.condition,
+            p.urgency,
+            p.days_since_visit,
+            p.insurance,
+        )
+        ra = await asyncio.to_thread(
+            lambda: build_risk_assessment_fhir(
+                risk_score=risk_score,
+                risk_band=risk_band(risk_score),
+                priority=prio["priority"],
+                priority_confidence=float(prio["confidence"]),
+                shap_explanation=expl,
+                patient_reference=body.patient_reference,
+                assessment_id=body.assessment_id,
+            )
+        )
+        return ra
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _batch_score_sync(body: BatchPatientIn) -> dict:
     results = []
     for p in body.patients:
         try:
@@ -215,9 +315,13 @@ def batch_score(body: BatchPatientIn):
     return {"results": results, "count": len(results)}
 
 
-@app.post("/batch/seed", tags=["Batch"])
-def batch_score_seed():
-    """Score the 15 built-in seed patients — used for dashboard demo."""
+@app.post("/batch/score", tags=["Batch"])
+async def batch_score(body: BatchPatientIn):
+    """Score all patients in a single request — powers the 'Recalculate Risk' button."""
+    return await asyncio.to_thread(_batch_score_sync, body)
+
+
+def _batch_seed_sync() -> dict:
     results = []
     for p in SEED_PATIENTS:
         risk = risk_model.predict(
@@ -241,8 +345,14 @@ def batch_score_seed():
     return {"results": results, "count": len(results)}
 
 
+@app.post("/batch/seed", tags=["Batch"])
+async def batch_score_seed():
+    """Score the 15 built-in seed patients — used for dashboard demo."""
+    return await asyncio.to_thread(_batch_seed_sync)
+
+
 @app.get("/model/info", tags=["Model"])
-def model_info():
+async def model_info():
     """Return training metrics and feature importances for both models."""
     return {
         "risk_model":     {**risk_metrics,     "type": "RandomForestRegressor"},
@@ -252,11 +362,11 @@ def model_info():
 
 
 @app.get("/model/retrain", tags=["Model"])
-def retrain():
+async def retrain():
     """Force-retrain both models (clears cache)."""
     global risk_metrics, priority_metrics
-    risk_metrics     = risk_model.train(force=True)
-    priority_metrics = priority_model.train(force=True)
+    risk_metrics     = await asyncio.to_thread(risk_model.train, True)
+    priority_metrics = await asyncio.to_thread(priority_model.train, True)
     return {
         "message":        "Models retrained successfully",
         "risk_metrics":   risk_metrics,

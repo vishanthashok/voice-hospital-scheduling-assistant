@@ -33,7 +33,7 @@ class PriorityModel:
             self.metrics = {"cached": True, "note": "Loaded from disk"}
             return self.metrics
 
-        print("🧠 Training PriorityModel (Gradient Boosting Classifier)...")
+        print("[PriorityModel] Training Gradient Boosting Classifier...")
         t0 = time.time()
 
         df = augment_dataset(n_augmented=600)
@@ -87,7 +87,7 @@ class PriorityModel:
 
         joblib.dump(self.model,  MODEL_PATH)
         joblib.dump(self.scaler, SCALER_PATH)
-        print(f"   ✓ Priority model trained | Acc={accuracy:.3f} | CV={cv_scores.mean():.3f}±{cv_scores.std():.3f} | {self.metrics['train_time_sec']}s")
+        print(f"   Priority model trained | Acc={accuracy:.3f} | CV={cv_scores.mean():.3f}+/-{cv_scores.std():.3f} | {self.metrics['train_time_sec']}s")
         return self.metrics
 
     def predict(self, age: int, gender: str, condition: str, urgency: int,
