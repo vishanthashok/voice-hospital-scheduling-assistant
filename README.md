@@ -11,14 +11,14 @@ Client (Dev Console / API Client)
         |
         v
 FastAPI (`app/main.py`)
-  ├─ `/schedule-from-audio` (Whisper transcription)
+  ├─ `/schedule-from-audio` (Fish Audio transcription)
   ├─ `/schedule-from-text` (LLM function calling + parser)
   ├─ `/conversation/turn` (state machine for missing fields)
   └─ `/metrics` (operational counters)
         |
         v
 Service Layer (`app/services`)
-  ├─ `speech.py` -> OpenAI Whisper
+  ├─ `speech.py` -> Fish Audio ASR
   ├─ `llm.py` -> GPT function-calling JSON intent
   ├─ `scheduler.py` -> SQLite conflict checks + alternatives
   ├─ `calendar.py` -> Google Calendar event creation
@@ -36,7 +36,7 @@ SQLite (`db/app.db`) via SQLAlchemy ORM
 
 - Backend: FastAPI + Python
 - ORM/Database: SQLAlchemy + SQLite
-- Speech-to-text: OpenAI Whisper API
+- Speech-to-text: Fish Audio API
 - LLM intent extraction: OpenAI GPT with function calling
 - Calendar: Google Calendar API (service account)
 - Email: SMTP (Gmail test account)
@@ -73,6 +73,7 @@ cp .env.example .env
 4. Fill required backend variables in `.env`:
 
 - `OPENAI_API_KEY`
+- `FISH_AUDIO_API_KEY`
 - `GOOGLE_SERVICE_ACCOUNT_FILE`
 - `GOOGLE_CALENDAR_ID`
 - `SMTP_SENDER_EMAIL`

@@ -3,15 +3,10 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import twilio from "twilio";
 import admin from "firebase-admin";
-import fs from "fs";
-import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { createProxyMiddleware } from "http-proxy-middleware";
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {
@@ -44,6 +39,52 @@ async function startServer() {
 
   const PORT = parseInt(process.env.PORT || "3000");
   const ML_BACKEND_URL = process.env.ML_BACKEND_URL || "http://localhost:8000";
+  const SCHEDULING_API_URL = (process.env.SCHEDULING_API_URL || "http://localhost:8001").replace(/\/$/, "");
+  const activeVoiceSessions = new Map<string, { initialized: boolean; email: string }>();
+
+  async function callSchedulingApi(route: string, payload: Record<string, unknown>) {
+    const response = await fetch(`${SCHEDULING_API_URL}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Scheduling API ${response.status}: ${detail}`);
+    }
+    return response.json() as Promise<any>;
+  }
+
+  function gatherPrompt(
+    twiml: twilio.twiml.VoiceResponse,
+    prompt: string,
+    callSid: string,
+    fallbackPrompt = "I did not catch that. Please repeat.",
+  ) {
+    const gather = twiml.gather({
+      input: ["speech"],
+      action: `/api/voice/handle-turn?callSid=${encodeURIComponent(callSid)}`,
+      timeout: 4,
+      speechTimeout: "auto",
+    });
+    gather.say(prompt);
+    twiml.say(fallbackPrompt);
+    twiml.redirect(`/api/voice/handle-turn?callSid=${encodeURIComponent(callSid)}`);
+  }
+
+  async function mirrorBookingToDashboard(result: any, fromNumber: string) {
+    if (result?.status !== "booked" || !result.intent) return;
+    const intent = result.intent;
+    await db.collection("appointments").add({
+      patientName: intent.patient_name,
+      patientPhone: fromNumber || "Unknown",
+      reason: intent.appointment_type,
+      urgency: intent.urgency,
+      preferredTime: `${intent.date} ${intent.time_preference}`,
+      status: "confirmed",
+      createdAt: new Date().toISOString(),
+    });
+  }
 
   // Proxy /api/ml/* → Python FastAPI ML backend (port 8000)
   app.use(
@@ -62,135 +103,98 @@ async function startServer() {
   );
 
   // API Routes
-  
-  // Twilio Voice Webhook
+
+  // Twilio Voice Webhook -> FastAPI conversation pipeline
   app.post("/api/voice", async (req, res) => {
-    const callSid = req.body.CallSid;
+    const callSid = req.body.CallSid || `call-${Date.now()}`;
+    const fromNumber = req.body.From || "";
+    const patientEmail = `${String(fromNumber).replace(/[^\d]/g, "") || "caller"}@voice.medivoice.local`;
+    activeVoiceSessions.set(callSid, { initialized: false, email: patientEmail });
     await logEvent(callSid, "CALL_RECEIVED", { from: req.body.From });
 
     const twiml = new twilio.twiml.VoiceResponse();
-    
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: "/api/voice/handle-name",
-      timeout: 3,
-    });
-    
-    gather.say("Welcome to the Hospital Scheduling Assistant. May I have your name, please?");
-    
-    twiml.say("I didn't catch that. Please call back later.");
-    twiml.hangup();
+    gatherPrompt(
+      twiml,
+      "Welcome to the Hospital Scheduling Assistant. Tell me your full appointment request, including name, doctor, day, and time preference.",
+      callSid,
+    );
 
     res.type("text/xml");
     res.send(twiml.toString());
   });
 
-  app.post("/api/voice/handle-name", async (req, res) => {
-    const callSid = req.body.CallSid;
-    const name = req.body.SpeechResult;
+  app.post("/api/voice/handle-turn", async (req, res) => {
+    const callSid = (req.query.callSid as string) || req.body.CallSid || `call-${Date.now()}`;
+    const session = activeVoiceSessions.get(callSid) || {
+      initialized: false,
+      email: `${String(req.body.From || "").replace(/[^\d]/g, "") || "caller"}@voice.medivoice.local`,
+    };
+    const userSpeech = (req.body.SpeechResult || "").trim();
     const twiml = new twilio.twiml.VoiceResponse();
-    
-    if (!name) {
-      await logEvent(callSid, "NAME_MISSING");
-      twiml.redirect("/api/voice");
-    } else {
-      await logEvent(callSid, "NAME_COLLECTED", { name });
-      const gather = twiml.gather({
-        input: ["speech"],
-        action: `/api/voice/handle-reason?name=${encodeURIComponent(name)}`,
-        timeout: 3,
-      });
-      gather.say(`Thank you, ${name}. What is the reason for your visit today?`);
-      twiml.say("I didn't hear a reason. Please try again.");
-      twiml.redirect(`/api/voice/handle-name?SpeechResult=${encodeURIComponent(name)}`);
+    if (!userSpeech) {
+      gatherPrompt(twiml, "I did not catch that. Please repeat your answer.", callSid);
+      res.type("text/xml");
+      res.send(twiml.toString());
+      return;
     }
 
-    res.type("text/xml");
-    res.send(twiml.toString());
-  });
-
-  app.post("/api/voice/handle-reason", async (req, res) => {
-    const callSid = req.body.CallSid;
-    const name = req.query.name as string;
-    const reason = req.body.SpeechResult;
-    const twiml = new twilio.twiml.VoiceResponse();
-    
-    if (!reason) {
-      await logEvent(callSid, "REASON_MISSING", { name });
-      twiml.redirect(`/api/voice/handle-name?SpeechResult=${encodeURIComponent(name)}`);
-    } else {
-      await logEvent(callSid, "REASON_COLLECTED", { name, reason });
-      const gather = twiml.gather({
-        input: ["speech"],
-        action: `/api/voice/handle-urgency?name=${encodeURIComponent(name)}&reason=${encodeURIComponent(reason)}`,
-        timeout: 3,
-      });
-      gather.say("I understand. On a scale of 1 to 5, how urgent is your concern?");
-      twiml.say("Please provide a number from 1 to 5.");
-      twiml.redirect(`/api/voice/handle-reason?name=${encodeURIComponent(name)}&SpeechResult=${encodeURIComponent(reason)}`);
-    }
-
-    res.type("text/xml");
-    res.send(twiml.toString());
-  });
-
-  app.post("/api/voice/handle-urgency", async (req, res) => {
-    const callSid = req.body.CallSid;
-    const name = req.query.name as string;
-    const reason = req.query.reason as string;
-    const urgencyText = req.body.SpeechResult;
-    const twiml = new twilio.twiml.VoiceResponse();
-    
-    // Simple urgency extraction
-    let urgency = parseInt(urgencyText) || 3;
-    if (isNaN(urgency)) urgency = 3;
-
-    await logEvent(callSid, "URGENCY_COLLECTED", { name, reason, urgency });
-
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: `/api/voice/handle-slot?name=${encodeURIComponent(name)}&reason=${encodeURIComponent(reason)}&urgency=${urgency}`,
-      timeout: 3,
-    });
-    
-    gather.say("Got it. We have slots available at 10 AM, 1:30 PM, and 3 PM. Which one works for you?");
-    twiml.say("Please pick a time.");
-    twiml.redirect(`/api/voice/handle-urgency?name=${encodeURIComponent(name)}&reason=${encodeURIComponent(reason)}&SpeechResult=${urgency}`);
-
-    res.type("text/xml");
-    res.send(twiml.toString());
-  });
-
-  app.post("/api/voice/handle-slot", async (req, res) => {
-    const callSid = req.body.CallSid;
-    const name = req.query.name as string;
-    const reason = req.query.reason as string;
-    const urgency = parseInt(req.query.urgency as string);
-    const slotText = req.body.SpeechResult || "3:00 PM";
-    const twiml = new twilio.twiml.VoiceResponse();
-    
-    await logEvent(callSid, "SLOT_COLLECTED", { name, reason, urgency, slot: slotText });
-
-    // Save to Firestore
     try {
-      await db.collection("appointments").add({
-        patientName: name,
-        patientPhone: req.body.From || "Unknown",
-        reason: reason,
-        urgency: urgency,
-        preferredTime: slotText,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-      });
-      
-      await logEvent(callSid, "APPOINTMENT_CREATED", { name, slot: slotText });
+      await logEvent(callSid, "VOICE_TURN_RECEIVED", { speech: userSpeech, initialized: session.initialized });
+      const result = session.initialized
+        ? await callSchedulingApi("/conversation/turn", {
+            session_id: callSid,
+            message: userSpeech,
+            patient_email: session.email,
+          })
+        : await callSchedulingApi("/schedule-from-text", {
+            text: userSpeech,
+            session_id: callSid,
+            patient_email: session.email,
+          });
 
-      twiml.say(`Perfect. Your appointment for ${slotText} has been requested. You will receive a confirmation shortly. Thank you for calling!`);
-      twiml.hangup();
+      if (result.status === "needs_more_info") {
+        activeVoiceSessions.set(callSid, { ...session, initialized: true });
+        await logEvent(callSid, "VOICE_ASK_NEXT_FIELD", {
+          missing: result.missing_fields,
+          prompt: result.message,
+        });
+        gatherPrompt(twiml, result.message || "Please provide the missing information.", callSid);
+      } else if (result.status === "booked") {
+        activeVoiceSessions.delete(callSid);
+        await mirrorBookingToDashboard(result, req.body.From || "Unknown");
+        await logEvent(callSid, "APPOINTMENT_BOOKED", { intent: result.intent, appointment_id: result.appointment_id });
+        twiml.say(result.message || "Your appointment is confirmed. Thank you for calling.");
+        twiml.hangup();
+      } else if (result.status === "alternatives") {
+        activeVoiceSessions.delete(callSid);
+        const alternatives = Array.isArray(result.alternatives) ? result.alternatives.slice(0, 3) : [];
+        const alternativeSpeech =
+          alternatives.length > 0
+            ? alternatives
+                .map((slot: any, index: number) => {
+                  const start = new Date(slot.start_time);
+                  return `Option ${index + 1}: ${start.toDateString()} at ${start.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}`;
+                })
+                .join(". ")
+            : "No alternatives are available right now.";
+        await logEvent(callSid, "APPOINTMENT_ALTERNATIVES", { alternatives });
+        twiml.say(`${result.message || "Requested slot is unavailable."} ${alternativeSpeech}`);
+        twiml.say("Please call again to pick one of these alternatives.");
+        twiml.hangup();
+      } else {
+        activeVoiceSessions.delete(callSid);
+        await logEvent(callSid, "APPOINTMENT_FAILED", { detail: result.message });
+        twiml.say(result.message || "I could not complete the booking. Please try again later.");
+        twiml.hangup();
+      }
     } catch (error) {
-      console.error("Error saving appointment:", error);
+      console.error("Error from scheduling pipeline:", error);
+      activeVoiceSessions.delete(callSid);
       await logEvent(callSid, "APPOINTMENT_FAILED", { error: (error as Error).message });
-      twiml.say("I'm sorry, I encountered an error while booking. Please try again later.");
+      twiml.say("I encountered a system error while processing your request. Please try again shortly.");
       twiml.hangup();
     }
 
