@@ -42,6 +42,27 @@ async function startServer() {
   const SCHEDULING_API_URL = (process.env.SCHEDULING_API_URL || "http://localhost:8001").replace(/\/$/, "");
   const activeVoiceSessions = new Map<string, { initialized: boolean; email: string }>();
 
+  const TWILIO_SMS_ENABLED = String(process.env.TWILIO_SMS_ENABLED || "").toLowerCase() === "true";
+  const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
+  const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+  const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER || "";
+  const twilioClient =
+    TWILIO_SMS_ENABLED && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null;
+
+  async function sendSms(to: string, body: string) {
+    if (!twilioClient) {
+      throw new Error("Twilio SMS is not configured. Set TWILIO_SMS_ENABLED=true plus TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN.");
+    }
+    if (!TWILIO_PHONE_NUMBER) {
+      throw new Error("TWILIO_PHONE_NUMBER is required to send SMS.");
+    }
+    return twilioClient.messages.create({
+      to,
+      from: TWILIO_PHONE_NUMBER,
+      body,
+    });
+  }
+
   async function callSchedulingApi(route: string, payload: Record<string, unknown>) {
     const response = await fetch(`${SCHEDULING_API_URL}${route}`, {
       method: "POST",
@@ -163,6 +184,22 @@ async function startServer() {
         activeVoiceSessions.delete(callSid);
         await mirrorBookingToDashboard(result, req.body.From || "Unknown");
         await logEvent(callSid, "APPOINTMENT_BOOKED", { intent: result.intent, appointment_id: result.appointment_id });
+
+        if (TWILIO_SMS_ENABLED) {
+          const to = String(req.body.From || "").trim();
+          if (to) {
+            try {
+              const smsBody =
+                result.message ||
+                "Your appointment is confirmed. Reply STOP to unsubscribe (demo).";
+              const msg = await sendSms(to, smsBody);
+              await logEvent(callSid, "SMS_SENT", { to, sid: msg.sid });
+            } catch (e) {
+              await logEvent(callSid, "SMS_FAILED", { to, error: (e as Error).message });
+            }
+          }
+        }
+
         twiml.say(result.message || "Your appointment is confirmed. Thank you for calling.");
         twiml.hangup();
       } else if (result.status === "alternatives") {
@@ -200,6 +237,22 @@ async function startServer() {
 
     res.type("text/xml");
     res.send(twiml.toString());
+  });
+
+  // SMS API (for demos / admin console)
+  app.post("/api/sms/send", async (req, res) => {
+    try {
+      const to = String(req.body?.to || "").trim();
+      const body = String(req.body?.body || "").trim();
+      if (!to || !body) {
+        res.status(400).json({ error: "Missing required fields: to, body" });
+        return;
+      }
+      const msg = await sendSms(to, body);
+      res.json({ sid: msg.sid, status: msg.status });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
   });
 
   // Dashboard API

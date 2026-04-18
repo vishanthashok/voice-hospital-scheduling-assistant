@@ -4,5 +4,13 @@ dist/
 coverage/
 .DS_Store
 *.log
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+.venv/
+.vscode/
 .env*
 !.env.example
