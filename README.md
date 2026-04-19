@@ -148,7 +148,7 @@ Things that bit us, preserved in the README so they don't bite you:
   gated behind Twilio verified caller IDs on trial accounts.
 - **Better prompts** — calibrating the risk cutoffs against real
   historical triage outcomes.
-- **Deploy.** Any HTTPS host for the API + static frontend; a stable tunnel (e.g. Cloudflare) helps for local demos.
+- **Deploy.** See [`DEPLOY.md`](DEPLOY.md) — recommended: **Cloudflare Pages** (UI) + **Railway or Fly** (API) + DNS for `medivoice.us`.
 
 ## Under the hood (optional reading)
 

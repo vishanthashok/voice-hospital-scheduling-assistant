@@ -1,16 +1,45 @@
-# Deploy MediVoice (provider-neutral)
+# Deploy MediVoice — recommended setup
 
-You need **two HTTPS endpoints**:
+**Why not “Cloudflare only”?** Cloudflare Pages is ideal for the **static** React app. Your **API is Python (FastAPI)**; running it on Workers is the wrong tool. The usual pattern is **Cloudflare for the website + DNS/CDN**, and a **small Python host** for the API.
 
-1. **API** — FastAPI in `backend/` (Twilio webhooks, `/triage`, `/health`, `/voice/*`, SSE).
-2. **Web UI** — static build from `frontend/` (`npm run build` → `frontend/dist`).
+## Recommended (best balance for solo + `medivoice.us`)
 
-Build the SPA with **`VITE_API_BASE`** set to your **API origin** (no trailing slash), e.g. `https://api.medivoice.us`.
+| Piece | Service | Role |
+|--------|---------|------|
+| **Dashboard (static)** | [Cloudflare Pages](https://pages.cloudflare.com/) | Hosts `frontend/` build; global CDN + free TLS |
+| **API (FastAPI)** | [Railway](https://railway.app/) or [Fly.io](https://fly.io/) | Runs `backend/`; public HTTPS URL; easy env vars |
+| **DNS** | [Cloudflare DNS](https://developers.cloudflare.com/dns/) | Point `api.medivoice.us` → API host, `@` / `www` → Pages |
 
-On the API host, set at minimum **`GEMINI_API_KEY`**, Twilio vars, and **`PUBLIC_BASE_URL`** to that same API origin so Twilio `Gather` URLs are absolute.
+**Order of operations**
 
-**Examples** (pick one): [Railway](https://railway.app), [Fly.io](https://fly.io), [Google Cloud Run](https://cloud.google.com/run), [AWS App Runner / ECS](https://aws.amazon.com/apprunner/), a **VPS** with **Caddy** or **nginx** + **certbot**, or **Cloudflare** (Tunnel + Pages). The repo does not assume a single vendor.
+1. **Deploy the API** (Railway/Fly): root directory `backend`, start e.g. `uvicorn main:app --host 0.0.0.0 --port $PORT`, install from `requirements.txt`. Set `GEMINI_API_KEY`, Twilio vars, and **`PUBLIC_BASE_URL=https://api.medivoice.us`** (after DNS works) or your temporary `https://….railway.app` URL first.
+2. **Add custom hostname** `api.medivoice.us` on that host; at your DNS provider create the **CNAME** they show.
+3. **Cloudflare Pages**: connect GitHub repo, **Root directory** `frontend`, **Build command** `npm run build`, **Output** `dist`. **Environment variable** (build-time): **`VITE_API_BASE=https://api.medivoice.us`** (no trailing slash). Redeploy when the API URL is final.
+4. **Pages custom domain**: `medivoice.us` / `www` as you prefer; follow the CNAME/TXT steps Cloudflare gives you.
+5. **Twilio**: Voice webhook `POST https://api.medivoice.us/voice/incoming` (or run `scripts/set_twilio_webhook.py` with `PUBLIC_BASE_URL` set).
 
-**Custom domain (e.g. medivoice.us):** point **`api.*`** at the API and **`@` / `www`** at the static host; issue TLS at the edge or on the server; then set `PUBLIC_BASE_URL` and `VITE_API_BASE` to `https://api.yourdomain.tld` and rebuild the frontend.
+**GoDaddy + Cloudflare:** Either change **nameservers** at GoDaddy to Cloudflare (simplest for one dashboard), or leave DNS at GoDaddy and add **only** the records Pages/Railway tell you (more clicking, same result).
 
-**Twilio:** `POST https://<API>/voice/incoming` or use `scripts/set_twilio_webhook.py` with `PUBLIC_BASE_URL` in `.env`.
+---
+
+## Env checklist (production)
+
+**API**
+
+- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` (E.164)
+- `PUBLIC_BASE_URL` = public API origin, e.g. `https://api.medivoice.us`
+
+**Frontend build (Pages / any static host)**
+
+- `VITE_API_BASE` = same API origin as above
+
+---
+
+## Alternatives
+
+- **All-in-one:** [Railway](https://railway.app) two services from one repo (static + API) — fewer vendors, slightly less edge caching than Pages.
+- **GCP/AWS:** Cloud Run / App Runner — great if you already live there.
+- **VPS + Caddy:** Maximum control; you maintain TLS and process supervision.
+
+The repo stays **provider-neutral**; no vendor config files are required beyond each host’s UI.
