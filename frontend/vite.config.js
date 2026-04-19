@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
         "/triage": { target: backend, changeOrigin: true },
         "/export": { target: backend, changeOrigin: true },
         "/health": { target: backend, changeOrigin: true },
+        "/history": { target: backend, changeOrigin: true },
         "/voice": { target: backend, changeOrigin: true },
       },
     },
