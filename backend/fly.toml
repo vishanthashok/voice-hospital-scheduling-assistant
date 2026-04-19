@@ -1,0 +1,15 @@
+# Fly.io — one-time: flyctl apps create medivoice-api
+# Secrets: flyctl secrets set GEMINI_API_KEY=... TWILIO_ACCOUNT_SID=... TWILIO_AUTH_TOKEN=... TWILIO_PHONE_NUMBER=... PUBLIC_BASE_URL=https://medivoice-api.fly.dev
+# Deploy:  flyctl deploy
+app = "medivoice-api"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
