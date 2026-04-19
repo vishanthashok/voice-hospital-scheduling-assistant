@@ -342,6 +342,8 @@ def _run_bedrock_sync(transcript: str) -> dict[str, Any]:
     )
 
     try:
+        # Uses default credential chain: IAM keys, instance role, or
+        # AWS_BEARER_TOKEN_BEDROCK (Bedrock console short-term API key).
         client = boto3.client("bedrock-runtime", region_name=region)
         resp = client.invoke_model(
             modelId=model_id,
