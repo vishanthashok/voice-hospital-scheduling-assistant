@@ -62,13 +62,8 @@ ACTIVE_CALL_SIDS: set[str] = set()
 
 
 def _public_base() -> str:
-    """Twilio needs absolute HTTPS URLs. Prefer PUBLIC_BASE_URL (e.g. api.medivoice.us)."""
-    explicit = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
-    if explicit:
-        return explicit
-    # Render sets this to the service public URL (https://…onrender.com) when unset.
-    render = (os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
-    return render
+    """Twilio needs absolute HTTPS URLs; set PUBLIC_BASE_URL to your API origin (no trailing slash)."""
+    return (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
 
 
 def _voice_action_url(path: str) -> str:
