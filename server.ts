@@ -43,9 +43,16 @@ async function startServer() {
   app.use(express.json());
 
   const PORT = parseInt(process.env.PORT || "3000");
-  const ML_BACKEND_URL = process.env.ML_BACKEND_URL || "http://localhost:8000";
+  const ML_BACKEND_URL = process.env.ML_BACKEND_URL || "http://127.0.0.1:8000";
 
-  // Proxy /api/ml/* → Python FastAPI ML backend (port 8000)
+  // Dev-only: show where /api/ml is proxied (helps when UI says "ML offline")
+  if (process.env.NODE_ENV !== "production") {
+    app.get("/api/dev/ml-target", (_req, res) => {
+      res.json({ mlBackendUrl: ML_BACKEND_URL });
+    });
+  }
+
+  // Proxy /api/ml/* → Python FastAPI ML backend (see ML_BACKEND_URL)
   app.use(
     "/api/ml",
     createProxyMiddleware({
@@ -54,8 +61,21 @@ async function startServer() {
       pathRewrite: { "^/api/ml": "" },
       on: {
         error: (err: any, _req: any, res: any) => {
-          console.error("[ML Proxy] Error:", err.message);
-          (res as any).status(503).json({ error: "ML backend unavailable", detail: err.message });
+          const detail =
+            err?.message ||
+            err?.code ||
+            String(err ?? "ECONNREFUSED");
+          console.error("[ML Proxy] Cannot reach", ML_BACKEND_URL, "|", detail);
+          if (!res.headersSent) {
+            (res as any).status(503).json({
+              error: "ML backend unavailable",
+              detail,
+              hint:
+                "Start the FastAPI app (e.g. uvicorn on port 8000) or set ML_BACKEND_URL to your Render ML URL. " +
+                "For the browser to call Render directly, set VITE_ML_BACKEND_URL at build time instead of using /api/ml.",
+              target: ML_BACKEND_URL,
+            });
+          }
         },
       },
     })
@@ -224,8 +244,18 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(
+        `\n[MediVoice] Port ${PORT} is already in use (another npm run dev?).\n` +
+          `  Fix: close that terminal, or set PORT=3001 in .env and run again → http://localhost:3001\n`
+      );
+      process.exit(1);
+    }
+    throw err;
   });
 }
 

@@ -75,6 +75,8 @@ export interface PatientRecord {
   riskScore: number;
   doctor: string;
   callNotes: string;
+  /** "voice" = telephony / ASR; "manual" = staff-entered chart */
+  entrySource?: "voice" | "manual";
 }
 
 export const mockPatients: PatientRecord[] = [
@@ -108,11 +110,31 @@ const getPatientById = (id: string | null) => id ? mockPatients.find(p => p.id =
 
 type View = "triage" | "dashboard" | "schedule" | "patients" | "developer";
 
+const LOCAL_PREVIEW_KEY = "mediavoice_local_preview";
+
+function readLocalPreviewFlag(): boolean {
+  if (import.meta.env.VITE_SKIP_AUTH === "true") return true;
+  try {
+    return localStorage.getItem(LOCAL_PREVIEW_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Minimal stand-in so the dashboard renders without Firebase Google sign-in (localhost). */
+const mockLocalUser = {
+  uid: "local-preview",
+  displayName: "Local Developer",
+  photoURL: null as string | null,
+  email: "dev@localhost",
+} as User;
+
 export default function App() {
+  const [localPreview, setLocalPreview] = useState(readLocalPreviewFlag);
   const [user, setUser] = useState<User | null>(null);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [logs, setLogs] = useState<Log[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !readLocalPreviewFlag());
 
   const [activeView, setActiveView] = useState<View>("triage");
   const [isDeveloperMode, setIsDeveloperMode] = useState(false);
@@ -130,15 +152,16 @@ export default function App() {
 
 
   useEffect(() => {
+    if (localPreview) return;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [localPreview]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || localPreview) return;
 
     const qApts = query(collection(db, "appointments"), orderBy("createdAt", "desc"));
     const unsubApts = onSnapshot(qApts, (snapshot) => {
@@ -154,7 +177,7 @@ export default function App() {
       unsubApts();
       unsubLogs();
     };
-  }, [user]);
+  }, [user, localPreview]);
 
   // Handle switching modes correctly
   useEffect(() => {
@@ -272,6 +295,27 @@ export default function App() {
     }
   };
 
+  const startLocalPreview = () => {
+    try {
+      localStorage.setItem(LOCAL_PREVIEW_KEY, "1");
+    } catch {
+      /* private mode */
+    }
+    setLocalPreview(true);
+  };
+
+  const handleLogout = () => {
+    if (localPreview) {
+      try {
+        localStorage.removeItem(LOCAL_PREVIEW_KEY);
+      } catch {
+        /* ignore */
+      }
+      setLocalPreview(false);
+      return;
+    }
+    void logout();
+  };
 
   if (loading) {
     return (
@@ -286,7 +330,9 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  const effectiveUser = localPreview ? mockLocalUser : user;
+
+  if (!effectiveUser) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
         <motion.div
@@ -298,14 +344,37 @@ export default function App() {
             <Activity className="w-10 h-10 text-white" />
           </div>
           <h1 className="text-4xl font-black text-white mb-4 tracking-tight">MediVoice AI</h1>
-          <p className="text-slate-400 mb-10 text-lg leading-relaxed">The future of hospital scheduling. Seamless voice-to-calendar integration.</p>
-          <button
-            onClick={loginWithGoogle}
-            className="w-full py-4 px-6 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-bold transition-all flex items-center justify-center gap-3 shadow-xl hover:shadow-slate-700/50 active:scale-95 border border-slate-700"
-          >
-            <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-            Admin Portal Access
-          </button>
+          <p className="text-slate-400 mb-6 text-lg leading-relaxed">The future of hospital scheduling. Seamless voice-to-calendar integration.</p>
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await loginWithGoogle();
+                } catch (e) {
+                  console.error(e);
+                  alert(
+                    "Google sign-in failed. For localhost: add http://localhost:3000 to Firebase → Auth → Authorized domains, " +
+                      "or use “Continue without Google” below."
+                  );
+                }
+              }}
+              className="w-full py-4 px-6 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-bold transition-all flex items-center justify-center gap-3 shadow-xl hover:shadow-slate-700/50 active:scale-95 border border-slate-700"
+            >
+              <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="" />
+              Admin Portal Access
+            </button>
+            <button
+              type="button"
+              onClick={startLocalPreview}
+              className="w-full py-4 px-6 bg-emerald-950/50 hover:bg-emerald-900/50 text-emerald-300 rounded-2xl font-bold transition-all border border-emerald-700/40 active:scale-[0.99]"
+            >
+              Continue without Google (local demo)
+            </button>
+          </div>
+          <p className="text-slate-600 text-xs mt-6 leading-relaxed">
+            Local demo skips Firebase login. Live Firestore data is unavailable; Triage Desk and mock patients still work.
+          </p>
         </motion.div>
       </div>
     );
@@ -360,14 +429,16 @@ export default function App() {
 
         <div className="mt-auto pt-6 border-t border-slate-800">
           <div className="bg-slate-950 border border-slate-800 rounded-3xl p-5 mb-6 flex items-center gap-4">
-            <img src={user.photoURL || ""} alt="" className="w-12 h-12 rounded-2xl shadow-sm border-2 border-slate-800" referrerPolicy="no-referrer" />
+            <img src={effectiveUser.photoURL || ""} alt="" className="w-12 h-12 rounded-2xl shadow-sm border-2 border-slate-800" referrerPolicy="no-referrer" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-white truncate">{user.displayName}</p>
-              <p className="text-xs text-slate-400 font-medium truncate">{isDeveloperMode ? 'Developer' : 'Administrator'}</p>
+              <p className="text-sm font-bold text-white truncate">{effectiveUser.displayName}</p>
+              <p className="text-xs text-slate-400 font-medium truncate">
+                {localPreview ? "Local preview" : isDeveloperMode ? "Developer" : "Administrator"}
+              </p>
             </div>
           </div>
           <button
-            onClick={logout}
+            onClick={handleLogout}
             className="w-full flex items-center justify-center gap-3 py-4 text-slate-500 hover:text-red-400 font-bold transition-colors"
           >
             <LogOut className="w-5 h-5" />

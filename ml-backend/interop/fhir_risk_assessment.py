@@ -27,7 +27,7 @@ def build_risk_assessment_fhir(
     """
     Map ML outputs + SHAP explanation to a FHIR R4 RiskAssessment resource (dict / JSON).
 
-    shap_explanation: output shape from RiskModel.get_explanation()
+    shap_explanation: top feature rows + rationale dict
       { "top_contributions": [...], "clinical_rationale": {...} }
     """
     when = occurrence_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -41,7 +41,7 @@ def build_risk_assessment_fhir(
             ),
             relativeRisk=float(risk_score) / 100.0,
             rationale=(
-                "Model output from MediVoice RandomForest risk regressor on scaled features; "
+                "MediVoice triage risk score; "
                 "band thresholds: Low <35, Moderate <60, High <80, Critical ≥80."
             ),
         )
@@ -51,7 +51,7 @@ def build_risk_assessment_fhir(
         RiskAssessmentPrediction(
             outcome=CodeableConcept(text=f"Triage priority: {priority}"),
             probabilityDecimal=float(priority_confidence),
-            rationale="Gradient boosting classifier over the same feature vector (Low / Medium / High).",
+            rationale="Triage priority classification (Low / Medium / High).",
         )
     )
 
@@ -62,21 +62,21 @@ def build_risk_assessment_fhir(
         rationale_txt = str(row.get("clinical_rationale", ""))
         preds.append(
             RiskAssessmentPrediction(
-                outcome=CodeableConcept(text=f"SHAP contribution — {fname}"),
+                outcome=CodeableConcept(text=f"Feature attribution — {fname}"),
                 rationale=(
-                    f"{rationale_txt} (SHAP={shap_v}, {direction}). "
-                    "Local feature attribution from Tree SHAP on the risk regressor."
+                    f"{rationale_txt} (attribution={shap_v}, {direction}). "
+                    "Top factors from Gemini feature attribution or rule-based fallback."
                 ),
             )
         )
 
     method = CodeableConcept(
-        text="MediVoice ML — RandomForestRegressor + SHAP TreeExplainer",
+        text="MediVoice triage — Gemini API with rule-based fallback",
         coding=[
             Coding(
                 system="https://medivoice.local/fhir/CodeSystem/ml-method",
                 code="risk-v1",
-                display="MediVoice risk engine",
+                display="MediVoice triage engine",
             )
         ],
     )

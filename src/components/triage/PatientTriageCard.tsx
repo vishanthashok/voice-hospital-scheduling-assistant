@@ -4,6 +4,7 @@ import { Brain, Download, FileJson, RefreshCw } from "lucide-react";
 import type { PatientRecord } from "../../App";
 import { RiskGauge } from "./RiskGauge";
 import type { RiskWithShap } from "../../lib/mlApi";
+import { getMlBackendOrigin } from "../../lib/mlApi";
 import { handleDownloadFHIR } from "../../lib/mlApi";
 import { AiLogicModal } from "./AiLogicModal";
 
@@ -133,10 +134,16 @@ export function PatientTriageCard({
               {exporting ? "…" : "Download Medical Record"}
             </button>
           </div>
-          <p className="text-[10px] text-slate-600 flex items-center gap-1">
-            <FileJson className="w-3 h-3" />
-            HL7 FHIR R4 <code className="text-slate-500">RiskAssessment</code> JSON ·{" "}
-            <code className="text-slate-600">VITE_ML_BACKEND_URL</code> for Render
+          <p className="text-[10px] text-slate-600 flex flex-wrap items-center gap-x-1 gap-y-0.5">
+            <FileJson className="w-3 h-3 shrink-0" />
+            FHIR <code className="text-slate-500">RiskAssessment</code> JSON ·{" "}
+            {getMlBackendOrigin() ? (
+              <span>direct API</span>
+            ) : (
+              <span>
+                local: run <code className="text-slate-500">npm run dev:ml</code> + <code className="text-slate-500">npm run dev</code>
+              </span>
+            )}
           </p>
         </div>
       </motion.div>

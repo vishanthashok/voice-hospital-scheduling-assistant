@@ -195,3 +195,18 @@ class RiskModel:
             "top_contributions": top,
             "clinical_rationale": clinical_rationale,
         }
+
+    def get_shap_explanations(
+        self,
+        age: int,
+        gender: str,
+        condition: str,
+        urgency: int,
+        days_since_visit: int,
+        insurance: str,
+        top_k: int = 3,
+    ) -> Dict[str, Any]:
+        """Alias for `get_explanation` — stable name for docs / interop."""
+        return self.get_explanation(
+            age, gender, condition, urgency, days_since_visit, insurance, top_k=top_k
+        )
