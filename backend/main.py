@@ -123,6 +123,7 @@ async def _process_gather_result(call_sid: str, speech: str) -> None:
             "priority": raw["priority"],
             "rationale": raw["rationale"],
             "top_drivers": raw["top_drivers"],
+            "differential": raw.get("differential", []),
             "source": raw["source"],
         }
     )
@@ -134,8 +135,13 @@ async def _process_gather_result(call_sid: str, speech: str) -> None:
             "call_sid": call_sid,
             "risk_score": raw["risk_score"],
             "priority": raw["priority"],
+            "rationale": raw["rationale"],
+            "top_drivers": raw["top_drivers"],
+            "differential": raw.get("differential", []),
             "source": raw["source"],
+            "transcript": text,
             "transcript_excerpt": text[:500],
+            "resolved": False,
         }
     )
     ACTIVE_CALL_SIDS.discard(call_sid)
@@ -157,6 +163,7 @@ class TriageOut(BaseModel):
     priority: Literal["P1", "P2", "P3"]
     rationale: str
     top_drivers: list[str]
+    differential: list[str] = Field(default_factory=list)
     source: Literal["gemini"]
 
 
@@ -169,6 +176,7 @@ class ExportIn(BaseModel):
     priority: str
     rationale: str
     top_drivers: list[str] = Field(default_factory=list)
+    differential: list[str] = Field(default_factory=list)
     occurrence_datetime: Optional[str] = None
 
 
@@ -187,12 +195,15 @@ def _append_audit(record: dict[str, Any]) -> None:
 
 _TRIAGE_SYSTEM = (
     "You are a Board-Certified Triage Nurse performing clinical reasoning for a "
-    "hospital scheduling dashboard. You do NOT issue a diagnosis. "
+    "hospital scheduling dashboard. You do NOT issue a diagnosis — you propose a "
+    "working differential for the physician to rule out. "
     "Return a JSON object ONLY (no markdown fences, no prose) with EXACTLY these keys:\n"
     '  "risk_score": integer 0-100 (higher = more acute),\n'
     '  "priority": "P1" | "P2" | "P3" (P1 = emergent, P2 = urgent, P3 = routine),\n'
     '  "rationale": short natural-language clinical reasoning (1-3 sentences),\n'
-    '  "top_drivers": array of EXACTLY 3 short labels (e.g. "Chest Pain", "High HR", "Age > 65").\n'
+    '  "top_drivers": array of EXACTLY 3 short labels (e.g. "Chest Pain", "High HR", "Age > 65"),\n'
+    '  "differential": array of EXACTLY 3 conditions to rule out, most-to-least likely '
+    '(e.g. "Acute Coronary Syndrome", "Pulmonary Embolism", "GERD").\n'
     "Be conservative: red-flag symptoms (chest pain, shortness of breath, stroke signs, "
     "severe bleeding, suicidal ideation) → risk_score >= 80 and priority P1."
 )
@@ -231,8 +242,9 @@ def _run_gemini_sync(transcript: str) -> dict[str, Any]:
             "You are a Board-Certified Triage Nurse. Analyze this transcript:\n"
             f'"""{transcript.strip()}"""\n'
             "Return a JSON object with: risk_score (integer 0-100), "
-            'priority (P1/P2/P3), rationale (natural language), and 3 top_drivers '
-            "(e.g. 'Chest Pain', 'High HR')."
+            "priority (P1/P2/P3), rationale (natural language), "
+            "3 top_drivers (e.g. 'Chest Pain', 'High HR'), "
+            "and 3 differential diagnoses to rule out (e.g. 'Acute Coronary Syndrome')."
         )
         resp = model.generate_content(prompt)
         raw = (resp.text or "").strip()
@@ -252,20 +264,37 @@ def _run_gemini_sync(transcript: str) -> dict[str, Any]:
         if p not in ("P1", "P2", "P3"):
             raise ValueError(f"invalid priority '{p}'")
         rationale = str(data.get("rationale") or "").strip() or "No rationale provided."
-        drivers_raw = data.get("top_drivers") or []
-        if not isinstance(drivers_raw, list):
-            raise ValueError("top_drivers must be a list")
-        drivers: list[str] = []
-        for item in drivers_raw:
-            if isinstance(item, str):
-                drivers.append(item.strip())
-            elif isinstance(item, dict):
-                label = item.get("factor") or item.get("label") or item.get("name") or ""
-                if label:
-                    drivers.append(str(label).strip())
+        def _coerce_str_list(raw: Any, fallback_keys: tuple[str, ...]) -> list[str]:
+            if not isinstance(raw, list):
+                return []
+            out: list[str] = []
+            for item in raw:
+                if isinstance(item, str):
+                    s = item.strip()
+                    if s:
+                        out.append(s)
+                elif isinstance(item, dict):
+                    for k in fallback_keys:
+                        v = item.get(k)
+                        if v:
+                            out.append(str(v).strip())
+                            break
+            return out
+
+        drivers = _coerce_str_list(
+            data.get("top_drivers"), ("factor", "label", "name", "driver")
+        )
         while len(drivers) < 3:
             drivers.append("—")
         drivers = drivers[:3]
+
+        differential = _coerce_str_list(
+            data.get("differential") or data.get("rule_out") or [],
+            ("condition", "label", "name", "diagnosis"),
+        )
+        while len(differential) < 3:
+            differential.append("—")
+        differential = differential[:3]
     except Exception as e:
         logger.warning("Gemini returned malformed JSON: %s | raw=%s", e, data)
         raise HTTPException(status_code=502, detail=f"Gemini returned malformed JSON: {e}") from e
@@ -275,6 +304,7 @@ def _run_gemini_sync(transcript: str) -> dict[str, Any]:
         "priority": p,
         "rationale": rationale[:2000],
         "top_drivers": drivers,
+        "differential": differential,
         "source": "gemini",
     }
 
@@ -308,6 +338,7 @@ async def triage(body: TriageIn):
         priority=raw["priority"],
         rationale=raw["rationale"],
         top_drivers=raw["top_drivers"],
+        differential=raw.get("differential", []),
         source=raw["source"],
     )
 
@@ -315,12 +346,18 @@ async def triage(body: TriageIn):
         {
             "ts": _utc_now(),
             "event_id": event_id,
+            "channel": "dashboard",
             "patient_id": body.patient_id,
             "patient_name": body.patient_name,
             "risk_score": out.risk_score,
             "priority": out.priority,
+            "rationale": out.rationale,
+            "top_drivers": out.top_drivers,
+            "differential": out.differential,
             "source": out.source,
+            "transcript": body.voice_transcript,
             "transcript_excerpt": body.voice_transcript[:500],
+            "resolved": False,
         }
     )
     return out
@@ -335,9 +372,19 @@ async def export_fhir(body: ExportIn) -> dict[str, Any]:
     score = max(0, min(100, int(body.risk_score)))
 
     driver_str = ", ".join([d for d in (body.top_drivers or []) if d and d != "—"])
+    diff_str = ", ".join([d for d in (body.differential or []) if d and d != "—"])
     outcome_text = f"Triage priority {body.priority} — {body.rationale[:260]}"
     if driver_str:
         outcome_text += f" Drivers: {driver_str}."
+    if diff_str:
+        outcome_text += f" Rule out: {diff_str}."
+
+    notes: list[dict[str, str]] = [
+        {"text": f"Driver: {d}"} for d in (body.top_drivers or []) if d and d != "—"
+    ]
+    notes.extend(
+        {"text": f"Rule out: {d}"} for d in (body.differential or []) if d and d != "—"
+    )
 
     resource: dict[str, Any] = {
         "resourceType": "RiskAssessment",
@@ -353,9 +400,72 @@ async def export_fhir(body: ExportIn) -> dict[str, Any]:
                 "qualitativeRisk": {"text": f"Score {score}/100"},
             }
         ],
-        "note": [{"text": f"Driver: {d}"} for d in (body.top_drivers or []) if d and d != "—"],
+        "note": notes,
     }
     return resource
+
+
+@app.get("/history")
+async def history(limit: int = 500, q: str | None = None) -> dict[str, Any]:
+    """Return recent triage events (newest first) for Patient Records + Analytics tabs."""
+    if not HISTORY_PATH.exists():
+        return {"total": 0, "events": []}
+
+    events: list[dict[str, Any]] = []
+    try:
+        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return {"total": 0, "events": []}
+
+    events.reverse()
+
+    if q:
+        needle = q.lower()
+        events = [
+            e for e in events
+            if needle in (e.get("patient_name") or "").lower()
+            or needle in (e.get("patient_id") or "").lower()
+            or needle in (e.get("transcript") or e.get("transcript_excerpt") or "").lower()
+            or needle in " ".join(e.get("top_drivers") or []).lower()
+            or needle in " ".join(e.get("differential") or []).lower()
+        ]
+
+    total = len(events)
+    return {"total": total, "events": events[: max(1, min(limit, 1000))]}
+
+
+@app.post("/history/{event_id}/resolve")
+async def resolve_event(event_id: str) -> dict[str, Any]:
+    """Flag an event as clinically resolved (rewrites the JSONL in place)."""
+    if not HISTORY_PATH.exists():
+        raise HTTPException(status_code=404, detail="No history yet")
+    updated = 0
+    rows: list[dict[str, Any]] = []
+    with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("event_id") == event_id and not row.get("resolved"):
+                row["resolved"] = True
+                row["resolved_ts"] = _utc_now()
+                updated += 1
+            rows.append(row)
+    with open(HISTORY_PATH, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"event_id {event_id} not found")
+    return {"event_id": event_id, "resolved": True}
 
 
 # ── Twilio Voice webhooks + SSE + click-to-call ─────────────────────────────

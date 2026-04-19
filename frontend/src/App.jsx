@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
 import { LiveCallVisualizer } from "./components/LiveCallVisualizer";
+import { LoginScreen, loadSession, clearSession } from "./components/LoginScreen";
+import { PatientRecords } from "./components/PatientRecords";
+import { AnalyticsDashboard } from "./components/AnalyticsDashboard";
+import { SettingsPanel, loadPrefs } from "./components/SettingsPanel";
 import {
   Activity,
   BarChart3,
@@ -21,6 +25,8 @@ import {
   Play,
   Pause,
   RefreshCw,
+  LogOut,
+  ShieldAlert,
 } from "lucide-react";
 
 const SCORING_STORAGE_KEY = "medivoice:scoring-enabled";
@@ -188,6 +194,8 @@ const NAV = [
 ];
 
 export default function App() {
+  const [session, setSession] = useState(() => loadSession());
+  const [prefs, setPrefs] = useState(() => loadPrefs());
   const [selected, setSelected] = useState(null);
   const [activeNav, setActiveNav] = useState("triage");
   const [triage, setTriage] = useState(null);
@@ -224,8 +232,10 @@ export default function App() {
     [triage?.risk_score]
   );
 
+  const alertThreshold = prefs.alertThreshold ?? 75;
   const highRiskAlert =
-    twilioLive || (triage && (triage.priority === "P1" || triage.risk_score >= 75));
+    twilioLive ||
+    (triage && (triage.priority === "P1" || triage.risk_score >= alertThreshold));
 
   const runTriage = useCallback(async (patient, { refreshSelected = true } = {}) => {
     if (!patient) return null;
@@ -341,6 +351,7 @@ export default function App() {
         priority: triage.priority,
         rationale: triage.rationale,
         top_drivers: triage.top_drivers ?? [],
+        differential: triage.differential ?? [],
       });
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/fhir+json" });
       const url = URL.createObjectURL(blob);
@@ -360,6 +371,17 @@ export default function App() {
   };
 
   const nowLabel = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const logout = () => {
+    clearSession();
+    setSession(null);
+  };
+
+  if (!session) {
+    return <LoginScreen onAuthed={setSession} />;
+  }
+
+  const activeNavLabel = NAV.find((n) => n.id === activeNav)?.label ?? "Workspace";
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
@@ -389,12 +411,27 @@ export default function App() {
             );
           })}
         </nav>
-        <div className="mt-auto rounded-lg border border-slate-800 p-1.5 text-[9px] text-slate-600">v2.0</div>
+        <div className="mt-auto flex flex-col items-center gap-2">
+          <span className="rounded-md border border-slate-800/90 bg-slate-900/80 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-widest text-slate-500">
+            Demo
+          </span>
+          <div className="rounded-lg border border-slate-800 p-1.5 text-[9px] text-slate-600">v2.0</div>
+        </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-px bg-gradient-to-r from-sky-500/90 via-indigo-500/60 to-transparent"
+          aria-hidden
+        />
         {/* Top bar */}
         <header className="flex h-16 shrink-0 items-center gap-4 border-b border-slate-800/80 bg-slate-950/90 px-6 backdrop-blur-md">
+          <div className="hidden min-w-0 shrink-0 flex-col border-r border-slate-800/80 pr-4 sm:flex">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Workspace
+            </span>
+            <span className="truncate text-sm font-semibold text-slate-100">{activeNavLabel}</span>
+          </div>
           <div className="relative max-w-xl flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <input
@@ -404,7 +441,7 @@ export default function App() {
               className="w-full rounded-xl border border-slate-800 bg-slate-900/80 py-2.5 pl-10 pr-24 text-sm text-slate-200 placeholder:text-slate-500 focus:border-sky-500/50 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
             />
             <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 sm:flex">
-              ⌘K
+              Ctrl+K
             </kbd>
           </div>
           <div className="ml-auto flex items-center gap-3">
@@ -418,14 +455,30 @@ export default function App() {
                 <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-slate-950" />
               )}
             </button>
-            <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 py-1.5 pl-2 pr-3">
+            <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 py-1.5 pl-2 pr-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 text-xs font-bold text-white">
-                MD
+                {(session.name || "MD")
+                  .split(" ")
+                  .map((s) => s[0])
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .join("")
+                  .toUpperCase()}
               </div>
               <div className="hidden text-left sm:block">
-                <p className="text-xs font-semibold text-slate-200">Dr. Morgan</p>
-                <p className="text-[10px] text-slate-500">Attending · ED</p>
+                <p className="text-xs font-semibold text-slate-200">
+                  {session.name || "Clinician"}
+                </p>
+                <p className="text-[10px] text-slate-500">{session.role || "Attending · ED"}</p>
               </div>
+              <button
+                type="button"
+                onClick={logout}
+                title="Sign out"
+                className="ml-1 rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-800 hover:text-rose-300"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </header>
@@ -439,9 +492,19 @@ export default function App() {
           </div>
         )}
 
-        <LiveCallVisualizer onLiveChange={setTwilioLive} />
+        <AnimatePresence mode="wait" initial={false}>
+        {activeNav === "triage" && (
+          <motion.div
+            key="triage"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="flex flex-1 flex-col"
+          >
+            <LiveCallVisualizer onLiveChange={setTwilioLive} />
 
-        <main className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-12 lg:p-6">
+            <main className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-12 lg:p-6">
           {/* Status board */}
           <section className="flex flex-col rounded-2xl border border-slate-800/80 bg-slate-900/40 shadow-sm lg:col-span-3">
             <div className="border-b border-slate-800/80 px-4 py-3">
@@ -704,6 +767,32 @@ export default function App() {
                           </div>
                         </div>
                       ) : null}
+                      {triage?.differential?.filter?.((d) => d && d !== "—").length ? (
+                        <div className="mt-4">
+                          <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-400">
+                            <ShieldAlert className="h-3 w-3" />
+                            Rule out · differential
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {triage.differential
+                              .filter((d) => d && d !== "—")
+                              .map((d, i) => (
+                                <span
+                                  key={`diff-${d}-${i}`}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-100"
+                                >
+                                  <span className="text-[9px] font-bold text-amber-400">
+                                    {i + 1}
+                                  </span>
+                                  {d}
+                                </span>
+                              ))}
+                          </div>
+                          <p className="mt-1.5 text-[10px] italic text-slate-500">
+                            Working differential — not a diagnosis. Clinician to confirm.
+                          </p>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex flex-col justify-center space-y-3">
                       <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -864,7 +953,49 @@ export default function App() {
               </div>
             </div>
           </section>
-        </main>
+            </main>
+          </motion.div>
+        )}
+
+        {activeNav === "records" && (
+          <motion.div
+            key="records"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="flex flex-1 flex-col"
+          >
+            <PatientRecords apiClient={client} />
+          </motion.div>
+        )}
+
+        {activeNav === "analytics" && (
+          <motion.div
+            key="analytics"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="flex flex-1 flex-col"
+          >
+            <AnalyticsDashboard apiClient={client} />
+          </motion.div>
+        )}
+
+        {activeNav === "settings" && (
+          <motion.div
+            key="settings"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="flex flex-1 flex-col"
+          >
+            <SettingsPanel apiClient={client} prefs={prefs} onPrefsChange={setPrefs} />
+          </motion.div>
+        )}
+        </AnimatePresence>
       </div>
     </div>
   );

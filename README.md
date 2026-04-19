@@ -5,6 +5,9 @@
 Patients call a number. Gemini listens. A risk score hits the nurse's
 dashboard before the caller finishes their sentence.
 
+> **Evaluation build.** Suitable for demos and pilot review.
+> Live demo: call **+1 (726) 239-4796** and watch the dashboard update in real time.
+
 ---
 
 ## The problem
@@ -61,7 +64,7 @@ Server-Sent Events, so there's zero poll lag.
 ```
       Caller                                Nurse's laptop
         │                                          │
-        │ 📞                                       │
+        │  [ PSTN voice ]                          │
         ▼                                          ▲
     Twilio Voice                                   │ SSE
         │                                          │
@@ -107,7 +110,7 @@ python -m uvicorn main:app --reload --port 8000
 # 2. Frontend (separate terminal)
 cd frontend
 npm install
-npm run dev        # → http://localhost:3000
+npm run dev        # opens http://localhost:3000
 
 # 3. Make your number reachable (separate terminal)
 cloudflared tunnel --url http://localhost:8000
@@ -156,8 +159,8 @@ and it shares the `.env` file with the triage demo.
 
 ## Built by
 
-One weekend, too much coffee, a Twilio trial credit.
-Not a medical device. Don't use this to actually triage real patients.
+Developed as a rapid prototype with Twilio Voice and Google Gemini.
+Not a medical device. Do not use for real patient triage or clinical decisions.
 
 ## License
 
