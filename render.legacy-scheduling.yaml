@@ -1,0 +1,11 @@
+# Legacy: Node + Express + scheduling stack (server.ts at repo root).
+# MediVoice triage (FastAPI + Vite) uses render.yaml instead.
+services:
+  - type: web
+    name: medivoice-ai
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: NODE_ENV=production npx tsx server.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
