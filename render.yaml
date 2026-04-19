@@ -1,5 +1,5 @@
 # MediVoice API only (FastAPI). Dashboard: New → Blueprint → this repo, or connect GitHub on a Web Service with rootDir backend.
-# Set env vars in Render (GEMINI_API_KEY, Twilio, PUBLIC_BASE_URL = your Render URL, no trailing slash).
+# Set env: Twilio, PUBLIC_BASE_URL, and either Bedrock (BEDROCK_MODEL_ID + AWS creds) or GEMINI_API_KEY.
 services:
   - type: web
     name: medivoice-api
@@ -11,6 +11,16 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      - key: BEDROCK_MODEL_ID
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: TRIAGE_BACKEND
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: TWILIO_ACCOUNT_SID

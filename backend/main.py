@@ -1,11 +1,12 @@
 """
-MediVoice AI 2.0 — Gemini clinical orchestrator (lean FastAPI, no local ML).
+MediVoice AI 2.0 — clinical triage via AWS Bedrock and/or Google Gemini (lean FastAPI).
 
-Strict Gemini-only triage:
-  - If GEMINI_API_KEY is missing  → 503 (Connecting to AI…)
-  - If the Gemini call itself fails → 502 (model error, surfaced in detail)
+Triage backend (see _run_triage_llm):
+  - Set BEDROCK_MODEL_ID + AWS credentials → Bedrock (e.g. Claude on Bedrock)
+  - Or set GEMINI_API_KEY / GOOGLE_API_KEY → Gemini
+  - TRIAGE_BACKEND=bedrock|gemini|auto (default auto: prefers Bedrock if BEDROCK_MODEL_ID is set)
 
-No silent "rule-based fallback" — caller must see the error.
+No silent rule-based fallback — caller must see the error.
 """
 from __future__ import annotations
 
@@ -37,13 +38,19 @@ logger = logging.getLogger("medivoice")
 DATA_DIR = _ROOT / "data"
 HISTORY_PATH = DATA_DIR / "triage_history.jsonl"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_TRIAGE_MODEL") or "gemini-1.5-flash"
+BEDROCK_MODEL_ID = (os.getenv("BEDROCK_MODEL_ID") or "").strip()
+_AWS_REGION = (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1").strip()
 
 # ── Key detection on import (so `uvicorn main:app` prints this banner once) ─
 _GEMINI_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if _GEMINI_KEY:
-    print(f"API KEY DETECTED (len={len(_GEMINI_KEY)}, prefix={_GEMINI_KEY[:8]}..., model={GEMINI_MODEL})")
+    print(f"GEMINI_API_KEY present (len={len(_GEMINI_KEY)}, model={GEMINI_MODEL})")
 else:
-    print("API KEY MISSING — set GEMINI_API_KEY in .env (triage will return 503)")
+    print("GEMINI_API_KEY not set — optional if using Bedrock only")
+if BEDROCK_MODEL_ID:
+    print(f"BEDROCK_MODEL_ID={BEDROCK_MODEL_ID!r} region={_AWS_REGION!r}")
+else:
+    print("BEDROCK_MODEL_ID not set — optional if using Gemini only")
 
 
 app = FastAPI(title="MediVoice AI 2.0", version="2.0.0")
@@ -105,7 +112,7 @@ async def _process_gather_result(call_sid: str, speech: str) -> None:
         return
     await _stream_transcript_chars(call_sid, text)
     try:
-        raw = await asyncio.to_thread(_run_gemini_sync, text)
+        raw = await asyncio.to_thread(_run_triage_llm, text)
     except HTTPException as he:
         await voice_broadcast(
             {"type": "triage_error", "call_sid": call_sid, "detail": he.detail, "status": he.status_code}
@@ -165,11 +172,11 @@ class TriageOut(BaseModel):
     rationale: str
     top_drivers: list[str]
     differential: list[str] = Field(default_factory=list)
-    source: Literal["gemini"]
+    source: Literal["gemini", "bedrock"]
 
 
 class ExportIn(BaseModel):
-    """Build FHIR RiskAssessment from live Gemini triage output."""
+    """Build FHIR RiskAssessment from live triage output."""
 
     patient_id: Optional[str] = None
     patient_name: Optional[str] = None
@@ -218,6 +225,155 @@ def _strip_fence(raw: str) -> str:
     return raw.strip()
 
 
+def _coerce_str_list(raw: Any, fallback_keys: tuple[str, ...]) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            s = item.strip()
+            if s:
+                out.append(s)
+        elif isinstance(item, dict):
+            for k in fallback_keys:
+                v = item.get(k)
+                if v:
+                    out.append(str(v).strip())
+                    break
+    return out
+
+
+def _normalize_triage_payload(data: dict[str, Any], *, source: Literal["gemini", "bedrock"]) -> dict[str, Any]:
+    """Validate LLM JSON and return unified triage dict."""
+    try:
+        rs = int(round(float(data["risk_score"])))
+        rs = max(0, min(100, rs))
+        p = str(data["priority"]).upper().strip()
+        if p not in ("P1", "P2", "P3"):
+            raise ValueError(f"invalid priority '{p}'")
+        rationale = str(data.get("rationale") or "").strip() or "No rationale provided."
+        drivers = _coerce_str_list(
+            data.get("top_drivers"), ("factor", "label", "name", "driver")
+        )
+        while len(drivers) < 3:
+            drivers.append("—")
+        drivers = drivers[:3]
+
+        differential = _coerce_str_list(
+            data.get("differential") or data.get("rule_out") or [],
+            ("condition", "label", "name", "diagnosis"),
+        )
+        while len(differential) < 3:
+            differential.append("—")
+        differential = differential[:3]
+    except Exception as e:
+        logger.warning("Malformed triage JSON (%s): %s | raw=%s", source, e, data)
+        raise HTTPException(status_code=502, detail=f"{source} returned malformed JSON: {e}") from e
+
+    return {
+        "risk_score": rs,
+        "priority": p,
+        "rationale": rationale[:2000],
+        "top_drivers": drivers,
+        "differential": differential,
+        "source": source,
+    }
+
+
+def _run_triage_llm(transcript: str) -> dict[str, Any]:
+    """Dispatch to Bedrock and/or Gemini. Raises HTTPException if nothing configured."""
+    mode = (os.getenv("TRIAGE_BACKEND") or "auto").strip().lower()
+    has_bedrock = bool((os.getenv("BEDROCK_MODEL_ID") or "").strip())
+    has_gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+
+    if mode == "gemini":
+        if not has_gemini:
+            raise HTTPException(
+                status_code=503,
+                detail="TRIAGE_BACKEND=gemini but GEMINI_API_KEY / GOOGLE_API_KEY is missing.",
+            )
+        return _run_gemini_sync(transcript)
+    if mode == "bedrock":
+        if not has_bedrock:
+            raise HTTPException(
+                status_code=503,
+                detail="TRIAGE_BACKEND=bedrock but BEDROCK_MODEL_ID is missing.",
+            )
+        return _run_bedrock_sync(transcript)
+
+    # auto: prefer Bedrock when model id is set
+    if has_bedrock:
+        return _run_bedrock_sync(transcript)
+    if has_gemini:
+        return _run_gemini_sync(transcript)
+    raise HTTPException(
+        status_code=503,
+        detail="No triage AI: set BEDROCK_MODEL_ID (AWS Bedrock) or GEMINI_API_KEY.",
+    )
+
+
+def _run_bedrock_sync(transcript: str) -> dict[str, Any]:
+    """Anthropic Claude Messages API on Bedrock (invoke_model)."""
+    import boto3
+
+    model_id = (os.getenv("BEDROCK_MODEL_ID") or "").strip()
+    if not model_id:
+        raise HTTPException(status_code=503, detail="BEDROCK_MODEL_ID is not set.")
+
+    region = (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1").strip()
+    user_prompt = (
+        "You are a Board-Certified Triage Nurse. Analyze this transcript:\n"
+        f'"""{transcript.strip()}"""\n'
+        "Return a JSON object with: risk_score (integer 0-100), "
+        "priority (P1/P2/P3), rationale (natural language), "
+        "3 top_drivers (e.g. 'Chest Pain', 'High HR'), "
+        "and 3 differential diagnoses to rule out (e.g. 'Acute Coronary Syndrome'). "
+        "Output JSON only, no markdown fences."
+    )
+
+    body = json.dumps(
+        {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2048,
+            "temperature": 0.2,
+            "system": _TRIAGE_SYSTEM,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }
+    )
+
+    try:
+        client = boto3.client("bedrock-runtime", region_name=region)
+        resp = client.invoke_model(
+            modelId=model_id,
+            body=body,
+            accept="application/json",
+            contentType="application/json",
+        )
+        raw_body = resp["body"].read()
+        out = json.loads(raw_body)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Bedrock invoke_model failed")
+        raise HTTPException(status_code=502, detail=f"Bedrock call failed: {e}") from e
+
+    text_parts: list[str] = []
+    for block in out.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text_parts.append(block.get("text") or "")
+    text = "".join(text_parts).strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="Bedrock returned an empty assistant message.")
+
+    try:
+        data = json.loads(_strip_fence(text))
+    except json.JSONDecodeError as e:
+        logger.warning("Bedrock JSON parse failed: %s | text=%s", e, text[:500])
+        raise HTTPException(status_code=502, detail=f"Bedrock returned non-JSON text: {e}") from e
+
+    return _normalize_triage_payload(data, source="bedrock")
+
+
 def _run_gemini_sync(transcript: str) -> dict[str, Any]:
     """Strict Gemini call. Raises HTTPException on any failure — no silent fallback."""
     import google.generativeai as genai
@@ -258,80 +414,57 @@ def _run_gemini_sync(transcript: str) -> dict[str, Any]:
         logger.exception("Gemini call failed")
         raise HTTPException(status_code=502, detail=f"Gemini call failed: {e}") from e
 
-    try:
-        rs = int(round(float(data["risk_score"])))
-        rs = max(0, min(100, rs))
-        p = str(data["priority"]).upper().strip()
-        if p not in ("P1", "P2", "P3"):
-            raise ValueError(f"invalid priority '{p}'")
-        rationale = str(data.get("rationale") or "").strip() or "No rationale provided."
-        def _coerce_str_list(raw: Any, fallback_keys: tuple[str, ...]) -> list[str]:
-            if not isinstance(raw, list):
-                return []
-            out: list[str] = []
-            for item in raw:
-                if isinstance(item, str):
-                    s = item.strip()
-                    if s:
-                        out.append(s)
-                elif isinstance(item, dict):
-                    for k in fallback_keys:
-                        v = item.get(k)
-                        if v:
-                            out.append(str(v).strip())
-                            break
-            return out
-
-        drivers = _coerce_str_list(
-            data.get("top_drivers"), ("factor", "label", "name", "driver")
-        )
-        while len(drivers) < 3:
-            drivers.append("—")
-        drivers = drivers[:3]
-
-        differential = _coerce_str_list(
-            data.get("differential") or data.get("rule_out") or [],
-            ("condition", "label", "name", "diagnosis"),
-        )
-        while len(differential) < 3:
-            differential.append("—")
-        differential = differential[:3]
-    except Exception as e:
-        logger.warning("Gemini returned malformed JSON: %s | raw=%s", e, data)
-        raise HTTPException(status_code=502, detail=f"Gemini returned malformed JSON: {e}") from e
-
-    return {
-        "risk_score": rs,
-        "priority": p,
-        "rationale": rationale[:2000],
-        "top_drivers": drivers,
-        "differential": differential,
-        "source": "gemini",
-    }
+    return _normalize_triage_payload(data, source="gemini")
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
+def _effective_triage_backend() -> str:
+    mode = (os.getenv("TRIAGE_BACKEND") or "auto").strip().lower()
+    hb = bool((os.getenv("BEDROCK_MODEL_ID") or "").strip())
+    hg = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    if mode == "gemini":
+        return "gemini" if hg else "none"
+    if mode == "bedrock":
+        return "bedrock" if hb else "none"
+    if hb:
+        return "bedrock"
+    if hg:
+        return "gemini"
+    return "none"
+
+
 @app.on_event("startup")
 async def _startup_banner() -> None:
-    print(f"[medivoice] gemini_model={GEMINI_MODEL} key_detected={bool(_GEMINI_KEY)}")
+    print(
+        f"[medivoice] triage_backend={_effective_triage_backend()} "
+        f"gemini_model={GEMINI_MODEL} gemini_key={bool(_GEMINI_KEY)} "
+        f"bedrock={bool(BEDROCK_MODEL_ID)}"
+    )
 
 
 @app.get("/health")
 async def health():
+    hb = bool((os.getenv("BEDROCK_MODEL_ID") or "").strip())
+    hg = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
     return {
         "status": "ok",
         "service": "medivoice-2",
+        "triage_backend": _effective_triage_backend(),
+        "ai_configured": hb or hg,
+        "bedrock_model_id": os.getenv("BEDROCK_MODEL_ID") or None,
+        "aws_region": _AWS_REGION,
+        "bedrock_configured": hb,
         "gemini_model": GEMINI_MODEL,
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
+        "gemini_configured": hg,
     }
 
 
 @app.post("/triage", response_model=TriageOut)
 async def triage(body: TriageIn):
     event_id = str(uuid.uuid4())
-    raw = await asyncio.to_thread(_run_gemini_sync, body.voice_transcript)
+    raw = await asyncio.to_thread(_run_triage_llm, body.voice_transcript)
 
     out = TriageOut(
         event_id=event_id,

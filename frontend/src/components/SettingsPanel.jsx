@@ -137,6 +137,8 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
   };
 
   const geminiPresent = !!health?.gemini_configured;
+  const bedrockPresent = !!health?.bedrock_configured;
+  const aiReady = !!health?.ai_configured;
   // The /health endpoint doesn't report twilio by design (keys stay server-side),
   // so we infer presence from a successful /voice/incoming path being reachable.
   // For now: show "Configured" if backend is reachable (server owns the token).
@@ -197,14 +199,33 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
           </div>
 
           <div className="space-y-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-200">Triage AI</span>
+                <span
+                  className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    aiReady
+                      ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30"
+                      : "bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/30"
+                  }`}
+                >
+                  {health?.triage_backend ?? "—"} · {aiReady ? "ready" : "not configured"}
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Bedrock: {bedrockPresent ? (health?.bedrock_model_id || "set") : "unset"} · Region{" "}
+                {health?.aws_region ?? "—"} · Gemini:{" "}
+                {geminiPresent ? health?.gemini_model || "key present" : "unset"}
+              </p>
+            </div>
             <MaskedKeyDisplay
-              label="GEMINI_API_KEY"
+              label="GEMINI_API_KEY (optional)"
               icon={KeyRound}
               present={geminiPresent}
               hint={
                 geminiPresent
                   ? `Using ${health?.gemini_model || "unknown"}.`
-                  : "Set GEMINI_API_KEY in .env and restart the backend."
+                  : "Optional if BEDROCK_MODEL_ID is set on the server."
               }
             />
             <MaskedKeyDisplay
@@ -228,7 +249,7 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
               Backend connectivity
             </h2>
             <p className="text-[11px] text-slate-500">
-              Ping <span className="font-mono">/health</span> to verify FastAPI + Gemini + Twilio
+              Ping <span className="font-mono">/health</span> to verify FastAPI + Bedrock/Gemini + Twilio
               webhooks are live.
             </p>
           </div>
@@ -257,13 +278,21 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
               <span>{health?.service ?? "—"}</span>
             </div>
             <div className="flex items-center justify-between">
+              <span className="text-slate-500">triage_backend</span>
+              <span>{health?.triage_backend ?? "—"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">bedrock_model_id</span>
+              <span className="text-right text-[10px]">{health?.bedrock_model_id ?? "—"}</span>
+            </div>
+            <div className="flex items-center justify-between">
               <span className="text-slate-500">gemini_model</span>
               <span>{health?.gemini_model ?? "—"}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-slate-500">gemini_configured</span>
-              <span className={geminiPresent ? "text-emerald-300" : "text-rose-300"}>
-                {String(!!geminiPresent)}
+              <span className="text-slate-500">ai_configured</span>
+              <span className={aiReady ? "text-emerald-300" : "text-rose-300"}>
+                {String(!!aiReady)}
               </span>
             </div>
             {conn.err && (

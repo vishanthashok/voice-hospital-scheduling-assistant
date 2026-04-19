@@ -11,7 +11,7 @@
 2. **New → Blueprint** → connect this repo → Render reads [`render.yaml`](render.yaml) and creates **medivoice-api**.  
    *Or:* **New → Web Service** → same repo → **Root Directory** `backend` → **Build** `pip install -r requirements.txt` → **Start** `uvicorn main:app --host 0.0.0.0 --port $PORT`.
 3. In the service **Environment**, set (minimum):
-   - `GEMINI_API_KEY`
+   - **Triage (pick one):** `BEDROCK_MODEL_ID` (e.g. `anthropic.claude-3-haiku-20240307-v1:0`) + `AWS_REGION` + `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` with **Bedrock invoke** permission, **or** `GEMINI_API_KEY` (optional `GEMINI_MODEL`).
    - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` (E.164)
    - `PUBLIC_BASE_URL` = your API’s public URL (e.g. `https://medivoice-api.onrender.com`) — **no trailing slash**
 4. Wait until it’s **Live**, then open `https://<your-service>.onrender.com/health`.
