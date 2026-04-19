@@ -1,383 +1,436 @@
 """
-main.py — FastAPI ML backend for MediVoice AI
-Runs on port 8000. Node.js Express proxies /api/ml/* to here.
+MediVoice 2.0 — Gemini Clinical Orchestrator (Hook'em Hacks patient-centered flow).
+
+FastAPI only; no local sklearn/SHAP. Triage reasoning runs in Gemini (google-genai SDK).
+Render: uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 from __future__ import annotations
-import sys, os
-sys.path.insert(0, os.path.dirname(__file__))
 
 import asyncio
+import json
 import logging
-from typing import Dict, List, Optional
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from data.seed_patients import CONDITION_LIST, SEED_PATIENTS
-from interop.fhir_risk_assessment import build_risk_assessment_fhir
-from models.priority_model import PriorityModel
-from models.risk_model import RiskModel
+sys.path.insert(0, os.path.dirname(__file__))
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from data.seed_patients import SEED_PATIENTS
+from data.synthetic_scheduler import generate_synthetic_patients
 from models.slot_recommender import score_slots
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("medivoice-ml")
+logger = logging.getLogger("medivoice-gemini")
 
-# Comma-separated list, e.g. "https://medivoice.onrender.com,http://localhost:5173"
-# If unset, allow all origins (dev-friendly; set explicitly in production on Render).
-_cors_raw = os.getenv("CORS_ORIGINS", "").strip()
-_cors_origins: List[str] = (
-    [o.strip() for o in _cors_raw.split(",") if o.strip()]
-    if _cors_raw
-    else ["*"]
-)
+DATA_DIR = Path(__file__).resolve().parent / "data"
+TRIAGE_JSONL = DATA_DIR / "triage_records.jsonl"
 
-# ── App setup ────────────────────────────────────────────────────────────────
+GEMINI_MODEL = os.getenv("GEMINI_TRIAGE_MODEL", "gemini-1.5-flash")
+# Prevent hung Gemini HTTP calls from blocking the UI forever (seconds).
+# Keep slightly under the browser fetch timeout (~55s) so the server returns rule-fallback JSON first.
+GEMINI_THREAD_TIMEOUT = float(os.getenv("GEMINI_THREAD_TIMEOUT", "48"))
+
+# Demo / free-tier: only one Gemini triage runs at a time (others wait in FIFO order).
+_TRIAGE_LOCK = asyncio.Lock()
+
+ORCHESTRATOR_SYSTEM = """You are a Senior Triage Nurse for a hospital scheduling demo (Hook'em Hacks — patient-centered care).
+You are NOT issuing a formal medical diagnosis. Analyze the voice transcript in clinical context and return JSON ONLY (no markdown).
+
+The JSON object MUST have exactly these keys:
+{
+  "risk_score": <number 0-100>,
+  "priority": "P1" | "P2" | "P3",
+  "clinical_rationale": "<short explanation for the care team>",
+  "top_drivers": [
+    {"factor": "<string>", "weight": <number 0-1>, "direction": "increases_risk" | "decreases_risk", "note": "<few words>"}
+  ],
+  "fhir_risk_assessment": <object: valid FHIR R4 RiskAssessment JSON with resourceType, id, status, subject, occurrenceDateTime, prediction>
+}
+top_drivers MUST have exactly 3 items. fhir_risk_assessment MUST be a complete RiskAssessment resource."""
+
+# ── CORS: allow all origins (hackathon / Render friendly) ───────────────────
 app = FastAPI(
-    title="MediVoice AI — ML Backend",
-    description="Patient risk scoring, priority classification, and smart slot recommendation.",
-    version="1.0.0",
+    title="MediVoice 2.0 — Gemini Clinical Orchestrator",
+    version="2.0.0",
+    description="Patient-centered triage via Gemini; JSONL audit trail.",
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Initialise and train models at startup ───────────────────────────────────
-risk_model     = RiskModel()
-priority_model = PriorityModel()
-risk_metrics: dict     = {}
-priority_metrics: dict = {}
-
 
 @app.on_event("startup")
-async def startup_event():
-    global risk_metrics, priority_metrics
-    logger.info("MediVoice ML backend starting — training models...")
-    risk_metrics     = await asyncio.to_thread(risk_model.train)
-    priority_metrics = await asyncio.to_thread(priority_model.train)
-    logger.info("All models ready.")
+async def _startup():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("Gemini model=%s key=%s", GEMINI_MODEL, "set" if _api_key() else "missing")
 
 
-# ── Request/response schemas ─────────────────────────────────────────────────
-
-class PatientFeatures(BaseModel):
-    age:              int             = Field(..., ge=0, le=120, example=65)
-    gender:           str             = Field(..., example="M")
-    condition:        str             = Field(..., example="Diabetes")
-    urgency:          int             = Field(..., ge=1, le=5, example=4)
-    days_since_visit: int             = Field(..., ge=0, example=30)
-    insurance:        str             = Field("Aetna", example="Medicare")
-    language:         Optional[str]   = Field("English", example="English")
-    preferred_doctor: Optional[str]   = Field(None, example="Dr. Patel")
-
-class ShapFeatureItem(BaseModel):
-    feature: str
-    shap_value: float
-    direction: str
+def _api_key() -> Optional[str]:
+    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 
-class RiskResponse(BaseModel):
-    risk_score: float
-    risk_band: str  # "Low" | "Moderate" | "High" | "Critical"
-    clinical_rationale: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Top SHAP features → human-readable clinical copy",
-    )
-    top_shap_contributions: List[ShapFeatureItem] = Field(default_factory=list)
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class PriorityResponse(BaseModel):
-    priority:      str
-    confidence:    float
-    probabilities: dict
-
-class SlotRecommendation(BaseModel):
-    slot_id:     str
-    day:         str
-    time:        str
-    doctor:      str
-    doctor_load: str
-    score:       float
-    reasoning:   dict
-
-class SlotResponse(BaseModel):
-    top_slots:   List[SlotRecommendation]
-    patient_summary: dict
-
-class BatchPatientIn(BaseModel):
-    patients: List[PatientFeatures]
+def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
 
 
-class FhirRiskAssessmentRequest(BaseModel):
-    patient: PatientFeatures
-    patient_reference: str = Field(
-        "Patient/medivoice-demo-1",
-        description="FHIR Reference.reference for the subject Patient",
-    )
-    assessment_id: str = Field("medivoice-risk-1", description="Business id for RiskAssessment.id")
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def risk_band(score: float) -> str:
-    if score >= 80: return "Critical"
-    if score >= 60: return "High"
-    if score >= 35: return "Moderate"
+def _risk_band(score: float) -> str:
+    if score >= 80:
+        return "Critical"
+    if score >= 60:
+        return "High"
+    if score >= 35:
+        return "Moderate"
     return "Low"
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+def _p_to_hml(p: str) -> str:
+    p = (p or "P3").strip().upper()
+    if p == "P1":
+        return "High"
+    if p == "P2":
+        return "Medium"
+    return "Low"
 
-@app.get("/", tags=["Health"])
-async def root():
-    return {"status": "ok", "service": "MediVoice ML Backend v1.0.0"}
 
-
-@app.get("/health", tags=["Health"])
-async def health():
+def _rule_fallback(transcript: str, age: int, condition: str) -> Dict[str, Any]:
+    t = (transcript or "").lower()
+    base = 40 + min(30, age // 3)
+    if any(x in t for x in ("chest pain", "can't breathe", "difficulty breathing", "severe", "worst")):
+        base = min(95, base + 35)
+    if any(x in t for x in ("asthma", "copd", "heart", "stroke")):
+        base = min(92, base + 15)
+    if "fine" in t or "routine" in t:
+        base = max(15, base - 15)
+    score = float(max(5, min(98, base)))
+    pl = "P1" if score >= 75 else "P2" if score >= 45 else "P3"
+    ra = {
+        "resourceType": "RiskAssessment",
+        "id": "rule-fallback-1",
+        "status": "final",
+        "subject": {"reference": "Patient/example"},
+        "occurrenceDateTime": _utc_iso(),
+        "prediction": [
+            {
+                "outcome": {"text": f"Rule-based triage score {score:.0f} — not a diagnosis"},
+                "relativeRisk": score / 100.0,
+            }
+        ],
+    }
     return {
-        "status": "healthy",
-        "risk_model_ready":     risk_model.model is not None,
-        "priority_model_ready": priority_model.model is not None,
+        "risk_score": round(score, 1),
+        "priority": pl,
+        "clinical_rationale": f"Rule-based fallback (no Gemini). Condition context: {condition}.",
+        "top_drivers": [
+            {"factor": "chief_complaint_language", "weight": 0.5, "direction": "increases_risk", "note": "Keyword cues in transcript"},
+            {"factor": "age", "weight": 0.25, "direction": "increases_risk", "note": str(age)},
+            {"factor": "condition", "weight": 0.25, "direction": "increases_risk", "note": condition},
+        ],
+        "fhir_risk_assessment": ra,
+        "source": "rules",
     }
 
 
-@app.post("/predict/risk", response_model=RiskResponse, tags=["Prediction"])
-async def predict_risk(patient: PatientFeatures):
-    """Predict a patient's medical risk score (0–100) with SHAP-based rationale."""
+def _parse_json_text(raw: str) -> Dict[str, Any]:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    return json.loads(raw)
+
+
+def run_gemini_orchestrator(
+    *,
+    voice_transcript: str,
+    patient_id: Optional[str],
+    patient_name: str,
+    age: int,
+    gender: str,
+    condition: str,
+) -> Dict[str, Any]:
+    """Central orchestrator — transcript-first triage + FHIR RiskAssessment in one JSON response."""
+    if os.getenv("MEDIVOICE_TRIAGE_RULES_ONLY", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("MEDIVOICE_TRIAGE_RULES_ONLY — skipping Gemini (instant demo)")
+        return _rule_fallback(voice_transcript, age, condition)
+
+    key = _api_key()
+    if not key:
+        logger.warning("No GEMINI_API_KEY — rule fallback")
+        return _rule_fallback(voice_transcript, age, condition)
+
+    from google import genai
+    from google.genai import types as genai_types
+
+    user = json.dumps(
+        {
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "age": age,
+            "gender": gender,
+            "condition": condition,
+            "voice_transcript": voice_transcript or "(empty — infer from demographics only)",
+        },
+        indent=2,
+    )
+
+    client = genai.Client(api_key=key)
+    cfg = genai_types.GenerateContentConfig(
+        system_instruction=ORCHESTRATOR_SYSTEM,
+        temperature=0.2,
+        response_mime_type="application/json",
+    )
     try:
-        score = await asyncio.to_thread(
-            risk_model.predict,
-            patient.age,
-            patient.gender,
-            patient.condition,
-            patient.urgency,
-            patient.days_since_visit,
-            patient.insurance,
-        )
-        expl = await asyncio.to_thread(
-            risk_model.get_explanation,
-            patient.age,
-            patient.gender,
-            patient.condition,
-            patient.urgency,
-            patient.days_since_visit,
-            patient.insurance,
-        )
-        tops = expl.get("top_contributions", [])
-        items = [
-            ShapFeatureItem(
-                feature=t["feature"],
-                shap_value=float(t["shap_value"]),
-                direction=str(t["direction"]),
+        resp = client.models.generate_content(model=GEMINI_MODEL, contents=user, config=cfg)
+        raw = (resp.text or "").strip()
+        if not raw:
+            raise RuntimeError("Empty Gemini response")
+        data = _parse_json_text(raw)
+        data["source"] = "gemini"
+        rs = float(data.get("risk_score", 50))
+        data["risk_score"] = max(0, min(100, rs))
+        if data.get("priority") not in ("P1", "P2", "P3"):
+            data["priority"] = "P3"
+        if not isinstance(data.get("top_drivers"), list):
+            data["top_drivers"] = []
+        data["top_drivers"] = data["top_drivers"][:3]
+        if not isinstance(data.get("fhir_risk_assessment"), dict):
+            data["fhir_risk_assessment"] = _rule_fallback(voice_transcript, age, condition)["fhir_risk_assessment"]
+        return data
+    except Exception as e:
+        logger.warning("Gemini orchestrator failed: %s — fallback", e)
+        return _rule_fallback(voice_transcript, age, condition)
+
+
+# ── Schemas (match frontend) ─────────────────────────────────────────────────
+
+class TriageAnalyzeIn(BaseModel):
+    patient_id: Optional[str] = None
+    patient_name: str = "Unknown"
+    age: int = Field(50, ge=0, le=120)
+    gender: str = "U"
+    condition: str = "Unknown"
+    voice_transcript: str = ""
+    session_id: Optional[str] = None
+
+
+class TopDriver(BaseModel):
+    factor: str
+    weight: float
+    direction: str
+    note: str = ""
+
+
+class TriageAnalyzeOut(BaseModel):
+    risk_score: float
+    risk_band: str
+    priority_level: str  # P1 P2 P3
+    priority_label: str  # High Medium Low
+    clinical_rationale: str
+    top_drivers: List[TopDriver]
+    fhir_risk_assessment: Dict[str, Any]
+    source: str
+
+
+class PatientFeatures(BaseModel):
+    age: int = 50
+    gender: str = "M"
+    condition: str = "Diabetes"
+    urgency: int = 3
+    days_since_visit: int = 30
+    insurance: str = "Aetna"
+    language: Optional[str] = "English"
+    preferred_doctor: Optional[str] = None
+    patient_id: Optional[str] = None
+    session_id: Optional[str] = None
+    voice_transcript: Optional[str] = None
+    entry_source: Optional[str] = None
+
+
+class SlotResponse(BaseModel):
+    top_slots: List[Dict[str, Any]]
+    patient_summary: Dict[str, Any]
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────
+
+
+@app.get("/", tags=["Health"])
+def root():
+    return {"status": "ok", "service": "MediVoice 2.0 Gemini Orchestrator"}
+
+
+@app.get("/health", tags=["Health"])
+def health():
+    return {
+        "status": "healthy",
+        "triage_backend": "gemini-orchestrator",
+        "gemini_configured": bool(_api_key()),
+        "gemini_model": GEMINI_MODEL,
+    }
+
+
+@app.post("/triage/analyze", response_model=TriageAnalyzeOut, tags=["Triage"])
+async def triage_analyze(body: TriageAnalyzeIn):
+    """Primary Hook'em flow: transcript → Gemini JSON (risk, P1–P3, drivers, FHIR RiskAssessment)."""
+    async with _TRIAGE_LOCK:
+        try:
+            try:
+                raw = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        run_gemini_orchestrator,
+                        voice_transcript=body.voice_transcript,
+                        patient_id=body.patient_id,
+                        patient_name=body.patient_name,
+                        age=body.age,
+                        gender=body.gender,
+                        condition=body.condition,
+                    ),
+                    timeout=GEMINI_THREAD_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Gemini orchestrator timed out after %ss — rule fallback", GEMINI_THREAD_TIMEOUT)
+                raw = _rule_fallback(body.voice_transcript, body.age, body.condition)
+            score = float(raw["risk_score"])
+            band = _risk_band(score)
+            pl = str(raw.get("priority", "P3")).upper()
+            if pl not in ("P1", "P2", "P3"):
+                pl = "P3"
+            drivers_in = raw.get("top_drivers") or []
+            drivers: List[TopDriver] = []
+            for i, row in enumerate(drivers_in[:3]):
+                if isinstance(row, dict):
+                    drivers.append(
+                        TopDriver(
+                            factor=str(row.get("factor", f"factor_{i}")),
+                            weight=float(row.get("weight", 0.33)),
+                            direction=str(row.get("direction", "increases_risk")),
+                            note=str(row.get("note", "")),
+                        )
+                    )
+            while len(drivers) < 3:
+                drivers.append(TopDriver(factor="context", weight=0.2, direction="increases_risk", note="Placeholder"))
+
+            out = TriageAnalyzeOut(
+                risk_score=round(score, 1),
+                risk_band=band,
+                priority_level=pl,
+                priority_label=_p_to_hml(pl),
+                clinical_rationale=str(raw.get("clinical_rationale", "")),
+                top_drivers=drivers[:3],
+                fhir_risk_assessment=dict(raw.get("fhir_risk_assessment") or {}),
+                source=str(raw.get("source", "rules")),
             )
-            for t in tops
-        ]
-        return RiskResponse(
-            risk_score=score,
-            risk_band=risk_band(score),
-            clinical_rationale=expl.get("clinical_rationale", {}),
-            top_shap_contributions=items,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+            _append_jsonl(
+                TRIAGE_JSONL,
+                {
+                    "ts": _utc_iso(),
+                    "patient_id": body.patient_id,
+                    "patient_name": body.patient_name,
+                    "session_id": body.session_id,
+                    "risk_score": out.risk_score,
+                    "priority_level": out.priority_level,
+                    "source": out.source,
+                },
+            )
+            return out
+        except Exception as e:
+            logger.exception("triage_analyze")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/predict/priority", response_model=PriorityResponse, tags=["Prediction"])
-async def predict_priority(patient: PatientFeatures):
-    """Classify a patient's triage priority: High / Medium / Low."""
-    try:
-        result = await asyncio.to_thread(
-            priority_model.predict,
-            patient.age,
-            patient.gender,
-            patient.condition,
-            patient.urgency,
-            patient.days_since_visit,
-            patient.insurance,
+@app.get("/scheduler/synthetic-patients", tags=["Scheduler"])
+async def list_synthetic_patients(limit: int = Query(120, ge=20, le=400)):
+    pts = await asyncio.to_thread(generate_synthetic_patients, limit)
+    return {"patients": pts, "count": len(pts)}
+
+
+@app.get("/model/info", tags=["Model"])
+def model_info():
+    return {
+        "mode": "gemini-clinical-orchestrator",
+        "model": GEMINI_MODEL,
+        "gemini_configured": bool(_api_key()),
+    }
+
+
+@app.post("/batch/seed", tags=["Batch"])
+def batch_seed():
+    """Dashboard demo — lightweight scores without Gemini spam."""
+    results = []
+    for p in SEED_PATIENTS:
+        tr = _rule_fallback(p.get("callNotes") or "", p["age"], p["condition"])
+        results.append(
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "risk_score": tr["risk_score"],
+                "risk_band": _risk_band(tr["risk_score"]),
+                "priority": _p_to_hml(tr["priority"]),
+                "confidence": 0.55,
+            }
         )
-        return PriorityResponse(**result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"results": results, "count": len(results)}
+
+
+def _features_to_triage_dict(p: PatientFeatures) -> Dict[str, Any]:
+    rf = _rule_fallback(
+        p.voice_transcript or "",
+        p.age,
+        p.condition,
+    )
+    return rf
 
 
 @app.post("/recommend/slot", response_model=SlotResponse, tags=["Scheduling"])
 async def recommend_slot(patient: PatientFeatures):
-    """Top 3 slots via OR-Tools CP-SAT (minimize wait × risk, burnout caps)."""
-    try:
-        risk_score = await asyncio.to_thread(
-            risk_model.predict,
-            patient.age,
-            patient.gender,
-            patient.condition,
-            patient.urgency,
-            patient.days_since_visit,
-            patient.insurance,
-        )
-        rb = risk_band(risk_score)
-        priority_res = await asyncio.to_thread(
-            priority_model.predict,
-            patient.age,
-            patient.gender,
-            patient.condition,
-            patient.urgency,
-            patient.days_since_visit,
-            patient.insurance,
-        )
-        ranked = await asyncio.to_thread(
-            score_slots,
-            risk_score,
-            priority_res["priority"],
-            patient.urgency,
-            patient.preferred_doctor,
-            patient.language or "English",
-            rb,
-        )
-        return SlotResponse(
-            top_slots=[SlotRecommendation(**s) for s in ranked[:3]],
-            patient_summary={
-                "ml_risk_score":    risk_score,
-                "ml_risk_band":     rb,
-                "ml_priority":      priority_res["priority"],
-                "ml_confidence":    priority_res["confidence"],
-                "scheduler":      "OR-Tools CP-SAT (wait×risk objective, 2h burnout cap)",
-            },
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    rf = _features_to_triage_dict(patient)
+    score = float(rf["risk_score"])
+    band = _risk_band(score)
+    pr = _p_to_hml(str(rf.get("priority", "P3")))
+    ranked = await asyncio.to_thread(
+        score_slots,
+        score,
+        pr,
+        patient.urgency,
+        patient.preferred_doctor,
+        patient.language or "English",
+        band,
+    )
+    return SlotResponse(
+        top_slots=ranked[:3],
+        patient_summary={
+            "ml_risk_score": score,
+            "ml_risk_band": band,
+            "ml_priority": pr,
+            "scheduler": "OR-Tools CP-SAT",
+        },
+    )
 
 
-@app.post("/interop/fhir/RiskAssessment", tags=["Interop"])
-async def fhir_risk_assessment(body: FhirRiskAssessmentRequest):
-    """Serialize ML outputs + SHAP into a FHIR R4 RiskAssessment JSON resource."""
-    try:
-        p = body.patient
-        risk_score = await asyncio.to_thread(
-            risk_model.predict,
-            p.age,
-            p.gender,
-            p.condition,
-            p.urgency,
-            p.days_since_visit,
-            p.insurance,
-        )
-        expl = await asyncio.to_thread(
-            risk_model.get_explanation,
-            p.age,
-            p.gender,
-            p.condition,
-            p.urgency,
-            p.days_since_visit,
-            p.insurance,
-        )
-        prio = await asyncio.to_thread(
-            priority_model.predict,
-            p.age,
-            p.gender,
-            p.condition,
-            p.urgency,
-            p.days_since_visit,
-            p.insurance,
-        )
-        ra = await asyncio.to_thread(
-            lambda: build_risk_assessment_fhir(
-                risk_score=risk_score,
-                risk_band=risk_band(risk_score),
-                priority=prio["priority"],
-                priority_confidence=float(prio["confidence"]),
-                shap_explanation=expl,
-                patient_reference=body.patient_reference,
-                assessment_id=body.assessment_id,
-            )
-        )
-        return ra
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# ── Entry (Render uses $PORT) ───────────────────────────────────────────────
 
+if __name__ == "__main__":
+    import uvicorn
 
-def _batch_score_sync(body: BatchPatientIn) -> dict:
-    results = []
-    for p in body.patients:
-        try:
-            risk = risk_model.predict(
-                age=p.age, gender=p.gender, condition=p.condition,
-                urgency=p.urgency, days_since_visit=p.days_since_visit,
-                insurance=p.insurance,
-            )
-            prio = priority_model.predict(
-                age=p.age, gender=p.gender, condition=p.condition,
-                urgency=p.urgency, days_since_visit=p.days_since_visit,
-                insurance=p.insurance,
-            )
-            results.append({
-                "risk_score":   risk,
-                "risk_band":    risk_band(risk),
-                "priority":     prio["priority"],
-                "confidence":   prio["confidence"],
-                "probabilities": prio["probabilities"],
-            })
-        except Exception as e:
-            results.append({"error": str(e)})
-    return {"results": results, "count": len(results)}
-
-
-@app.post("/batch/score", tags=["Batch"])
-async def batch_score(body: BatchPatientIn):
-    """Score all patients in a single request — powers the 'Recalculate Risk' button."""
-    return await asyncio.to_thread(_batch_score_sync, body)
-
-
-def _batch_seed_sync() -> dict:
-    results = []
-    for p in SEED_PATIENTS:
-        risk = risk_model.predict(
-            age=p["age"], gender=p["gender"], condition=p["condition"],
-            urgency=p["urgency"], days_since_visit=p["days_since_visit"],
-            insurance=p.get("insurance", "Aetna"),
-        )
-        prio = priority_model.predict(
-            age=p["age"], gender=p["gender"], condition=p["condition"],
-            urgency=p["urgency"], days_since_visit=p["days_since_visit"],
-            insurance=p.get("insurance", "Aetna"),
-        )
-        results.append({
-            "id":           p["id"],
-            "name":         p["name"],
-            "risk_score":   risk,
-            "risk_band":    risk_band(risk),
-            "priority":     prio["priority"],
-            "confidence":   prio["confidence"],
-        })
-    return {"results": results, "count": len(results)}
-
-
-@app.post("/batch/seed", tags=["Batch"])
-async def batch_score_seed():
-    """Score the 15 built-in seed patients — used for dashboard demo."""
-    return await asyncio.to_thread(_batch_seed_sync)
-
-
-@app.get("/model/info", tags=["Model"])
-async def model_info():
-    """Return training metrics and feature importances for both models."""
-    return {
-        "risk_model":     {**risk_metrics,     "type": "RandomForestRegressor"},
-        "priority_model": {**priority_metrics, "type": "GradientBoostingClassifier"},
-        "conditions_supported": CONDITION_LIST,
-    }
-
-
-@app.get("/model/retrain", tags=["Model"])
-async def retrain():
-    """Force-retrain both models (clears cache)."""
-    global risk_metrics, priority_metrics
-    risk_metrics     = await asyncio.to_thread(risk_model.train, True)
-    priority_metrics = await asyncio.to_thread(priority_model.train, True)
-    return {
-        "message":        "Models retrained successfully",
-        "risk_metrics":   risk_metrics,
-        "priority_metrics": priority_metrics,
-    }
+    _port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=_port, reload=False)

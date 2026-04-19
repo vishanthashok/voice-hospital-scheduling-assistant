@@ -39,75 +39,10 @@ async function startServer() {
 
   const PORT = parseInt(process.env.PORT || "3000");
   const ML_BACKEND_URL = process.env.ML_BACKEND_URL || "http://localhost:8000";
-  const SCHEDULING_API_URL = (process.env.SCHEDULING_API_URL || "http://localhost:8001").replace(/\/$/, "");
-  const activeVoiceSessions = new Map<string, { initialized: boolean; email: string }>();
+  const SCHEDULING_API_URL =
+    process.env.SCHEDULING_API_URL || "http://localhost:8001";
 
-  const TWILIO_SMS_ENABLED = String(process.env.TWILIO_SMS_ENABLED || "").toLowerCase() === "true";
-  const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
-  const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
-  const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER || "";
-  const twilioClient =
-    TWILIO_SMS_ENABLED && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null;
-
-  async function sendSms(to: string, body: string) {
-    if (!twilioClient) {
-      throw new Error("Twilio SMS is not configured. Set TWILIO_SMS_ENABLED=true plus TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN.");
-    }
-    if (!TWILIO_PHONE_NUMBER) {
-      throw new Error("TWILIO_PHONE_NUMBER is required to send SMS.");
-    }
-    return twilioClient.messages.create({
-      to,
-      from: TWILIO_PHONE_NUMBER,
-      body,
-    });
-  }
-
-  async function callSchedulingApi(route: string, payload: Record<string, unknown>) {
-    const response = await fetch(`${SCHEDULING_API_URL}${route}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`Scheduling API ${response.status}: ${detail}`);
-    }
-    return response.json() as Promise<any>;
-  }
-
-  function gatherPrompt(
-    twiml: twilio.twiml.VoiceResponse,
-    prompt: string,
-    callSid: string,
-    fallbackPrompt = "I did not catch that. Please repeat.",
-  ) {
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: `/api/voice/handle-turn?callSid=${encodeURIComponent(callSid)}`,
-      timeout: 4,
-      speechTimeout: "auto",
-    });
-    gather.say(prompt);
-    twiml.say(fallbackPrompt);
-    twiml.redirect(`/api/voice/handle-turn?callSid=${encodeURIComponent(callSid)}`);
-  }
-
-  async function mirrorBookingToDashboard(result: any, fromNumber: string) {
-    if (result?.status !== "booked" || !result.intent) return;
-    const intent = result.intent;
-    await db.collection("appointments").add({
-      patientName: intent.patient_name,
-      patientPhone: fromNumber || "Unknown",
-      reason: intent.appointment_type,
-      urgency: intent.urgency,
-      preferredTime: `${intent.date} ${intent.time_preference}`,
-      status: "confirmed",
-      createdAt: new Date().toISOString(),
-    });
-  }
-
-  // Proxy /api/ml/* → Python FastAPI ML backend (port 8000)
+  // Proxy /api/ml/* → Python FastAPI ML backend (see ML_BACKEND_URL)
   app.use(
     "/api/ml",
     createProxyMiddleware({
@@ -128,8 +63,21 @@ async function startServer() {
           proxyReq.write(bodyData);
         },
         error: (err: any, _req: any, res: any) => {
-          console.error("[ML Proxy] Error:", err.message);
-          (res as any).status(503).json({ error: "ML backend unavailable", detail: err.message });
+          const detail =
+            err?.message ||
+            err?.code ||
+            String(err ?? "ECONNREFUSED");
+          console.error("[ML Proxy] Cannot reach", ML_BACKEND_URL, "|", detail);
+          if (!res.headersSent) {
+            (res as any).status(503).json({
+              error: "ML backend unavailable",
+              detail,
+              hint:
+                "Start the FastAPI app (e.g. uvicorn on port 8000) or set ML_BACKEND_URL to your Render ML URL. " +
+                "For the browser to call Render directly, set VITE_ML_BACKEND_URL at build time instead of using /api/ml.",
+              target: ML_BACKEND_URL,
+            });
+          }
         },
       },
     })
@@ -325,8 +273,18 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(
+        `\n[MediVoice] Port ${PORT} is already in use (another npm run dev?).\n` +
+          `  Fix: close that terminal, or set PORT=3001 in .env and run again → http://localhost:3001\n`
+      );
+      process.exit(1);
+    }
+    throw err;
   });
 }
 

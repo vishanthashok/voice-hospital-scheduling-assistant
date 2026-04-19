@@ -1,10 +1,25 @@
 # MediVoice Voice Hospital Scheduling Assistant
 
-Production-ready local system for voice-first appointment booking with a complete pipeline:
+Production-ready local stack for **voice-first appointment booking** and **Gemini-powered clinical triage**, with a complete scheduling pipeline:
 
-`Speech -> Text -> Intent -> Scheduling -> Calendar -> Email Response`
+`Speech → Text → Intent → Scheduling → Calendar → Email`
 
-## Architecture
+**Hook ’em Hacks** — patient-centered scheduling with optional Gemini as the clinical orchestrator.
+
+## What’s in this repo
+
+| Piece | Role |
+|--------|------|
+| **Root app** (`server.ts`, `src/`) | Vite + Express: Twilio voice, proxies to Python services, main React UI (triage + dev console). |
+| **Scheduling API** (`app/`) | FastAPI: Fish Audio ASR, OpenAI intent, SQLite booking, Google Calendar, SMTP. Default **port 8001**. Proxied as `/api/scheduling/*`. |
+| **ML backend** (`ml-backend/`) | FastAPI: Gemini triage, FHIR-friendly exports, slot recommendations. Default **port 8000**. Proxied as `/api/ml/*`. |
+| **`backend/` / `frontend/`** | Optional legacy Gemini + Vite demo layouts; the primary UX is the root `src/` app. |
+
+Environment variables are documented in [`.env.example`](.env.example) (`ML_BACKEND_URL`, `SCHEDULING_API_URL`, `VITE_ML_BACKEND_URL`, `GEMINI_API_KEY`, etc.).
+
+---
+
+## Scheduling architecture
 
 ```text
 Client (Dev Console / API Client)
@@ -32,7 +47,7 @@ SQLite (`db/app.db`) via SQLAlchemy ORM
   └─ `patients`
 ```
 
-## Tech Stack
+### Tech stack (scheduling)
 
 - Backend: FastAPI + Python
 - ORM/Database: SQLAlchemy + SQLite
@@ -40,9 +55,8 @@ SQLite (`db/app.db`) via SQLAlchemy ORM
 - LLM intent extraction: OpenAI GPT with function calling
 - Calendar: Google Calendar API (service account)
 - Email: SMTP (Gmail test account)
-- Frontend: React (existing admin/dev console enhanced)
 
-## Project Structure
+### Project structure (scheduling)
 
 ```text
 app/
@@ -50,27 +64,77 @@ app/
   routes/
   services/
   models/
-  utils/
 db/
 tests/
 ```
 
+---
+
+## Clinical intelligence (Gemini, `ml-backend`)
+
+The ML service uses a **lean** pattern: short calls to **Google Gemini** (no on-box heavy ML). From a **voice transcript** (or text in the demo), it can produce triage-style outputs (risk-style scoring, priority bands, rationale) and related APIs for interoperability (e.g. FHIR-oriented flows). See `ml-backend/main.py` and `ml-backend/services/` for current routes (e.g. triage analysis, slot recommendation).
+
+If no API key is configured, **rule-based fallbacks** keep local demos runnable.
+
+```mermaid
+flowchart LR
+  subgraph client [Clinical dashboard]
+    UI[React UI]
+  end
+  subgraph api [FastAPI ml-backend]
+    T[Triage / analyze]
+    E[Export / FHIR helpers]
+    L[(audit / persistence)]
+  end
+  subgraph cloud [Google AI]
+    G[Gemini]
+  end
+  UI -->|JSON| T
+  T --> G
+  T --> L
+  UI --> E
+```
+
+---
+
 ## Setup
 
-1. Create and activate a Python virtual environment.
-2. Install Python dependencies:
+### 1. Root UI + Express
+
+From the repository root:
 
 ```bash
-pip install -r requirements.txt
-```
-
-3. Copy environment template:
-
-```bash
+npm install
 cp .env.example .env
+# Edit .env — see comments in .env.example
+npm run dev
 ```
 
-4. Fill required backend variables in `.env`:
+This serves the app (default **http://127.0.0.1:3000**). The dev server proxies **`/api/ml`** → `ML_BACKEND_URL` (default `http://127.0.0.1:8000`) and **`/api/scheduling`** → `SCHEDULING_API_URL` (default `http://localhost:8001`).
+
+### 2. Scheduling FastAPI (`app/`)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8001
+```
+
+Fill scheduling-related variables in `.env` (see below).
+
+### 3. ML backend (Gemini)
+
+```bash
+cd ml-backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# Set GEMINI_API_KEY (or GOOGLE_API_KEY) in .env at repo root or here
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Required / common `.env` entries (scheduling)
 
 - `OPENAI_API_KEY`
 - `FISH_AUDIO_API_KEY`
@@ -80,17 +144,7 @@ cp .env.example .env
 - `SMTP_APP_PASSWORD`
 - (Optional SMS) `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_SMS_ENABLED=true`
 
-5. Start FastAPI backend:
-
-```bash
-uvicorn app.main:app --reload --port 8001
-```
-
-6. (Optional) Run existing frontend:
-
-```bash
-npm run dev
-```
+---
 
 ## Twilio SMS (optional)
 
@@ -111,20 +165,19 @@ curl -X POST http://localhost:3000/api/sms/send \
   -d '{"to":"+1YOUR_NUMBER","body":"Your appointment is confirmed for tomorrow at 2 PM."}'
 ```
 
-## API Endpoints
+---
 
-- `POST /schedule-from-audio`
-  - multipart form: `audio`, optional `session_id`, `patient_email`
-- `POST /schedule-from-text`
-  - JSON body: `{ "text": "...", "session_id": "...", "patient_email": "..." }`
-- `POST /conversation/turn`
-  - JSON body: `{ "session_id": "...", "message": "...", "patient_email": "..." }`
+## Scheduling API endpoints
+
+Served by the scheduling app (direct **:8001** or via **`/api/scheduling`** through Express).
+
+- `POST /schedule-from-audio` — multipart form: `audio`, optional `session_id`, `patient_email`
+- `POST /schedule-from-text` — JSON: `{ "text": "...", "session_id": "...", "patient_email": "..." }`
+- `POST /conversation/turn` — JSON: `{ "session_id": "...", "message": "...", "patient_email": "..." }`
 - `GET /metrics`
 - `GET /health`
 
-## Example Request / Response
-
-### Schedule from text
+### Example: schedule from text
 
 ```bash
 curl -X POST http://localhost:8001/schedule-from-text \
@@ -156,7 +209,9 @@ Example success response:
 }
 ```
 
-## Demo Walkthrough
+---
+
+## Demo walkthrough (scheduling)
 
 1. Open Dev Console in the UI.
 2. Use **Pipeline Dry Run** to send natural language input.
@@ -164,27 +219,34 @@ Example success response:
 4. Check `/metrics` updates in the same console.
 5. Confirm:
    - Appointment persisted in `db/app.db`
-   - Google Calendar event created
-   - Confirmation email received
+   - Google Calendar event created (if configured)
+   - Confirmation email received (if SMTP configured)
 
-## Edge Cases Implemented
+### Edge cases implemented
 
 - Relative dates like `next Friday`
-- Time buckets like `afternoon` -> `13:00`
+- Time buckets like `afternoon` → `13:00`
 - Invalid date/time returns retry message
-- Double-booked slot returns 3 nearest alternatives
+- Double-booked slot returns nearest alternatives
 - Working-hours guard (`9:00` to `17:00`, 30-minute slots)
 - Multi-turn state machine collects missing fields incrementally
 
-## Tests
+---
 
-Run:
+## Tests
 
 ```bash
 pytest tests -q
 ```
 
 Included:
-- scheduler conflict prevention
-- alternative slot generation
-- health endpoint availability
+
+- Scheduler conflict prevention
+- Alternative slot generation
+- Health endpoint availability
+
+---
+
+## License
+
+Demo / educational use. Not for real clinical decisions without proper validation and governance.

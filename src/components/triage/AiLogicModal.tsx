@@ -3,20 +3,24 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Loader2, Brain } from "lucide-react";
 import type { PatientRecord } from "../../App";
-import { fetchRiskWithShap, type RiskWithShap } from "../../lib/mlApi";
+import {
+  analyzeClinicalTriage,
+  getSessionId,
+  type ClinicalTriageResponse,
+} from "../../lib/mlApi";
 
 export function AiLogicModal({
   open,
   onClose,
   patient,
-  daysSince,
+  daysSince: _daysSince,
 }: {
   open: boolean;
   onClose: () => void;
   patient: PatientRecord;
   daysSince: number;
 }) {
-  const [data, setData] = useState<RiskWithShap | null>(null);
+  const [data, setData] = useState<ClinicalTriageResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +35,15 @@ export function AiLogicModal({
       setLoading(true);
       setError(null);
       try {
-        const r = await fetchRiskWithShap(patient, daysSince);
+        const r = await analyzeClinicalTriage({
+          patient_id: patient.id,
+          patient_name: patient.name,
+          age: patient.age,
+          gender: patient.gender,
+          condition: patient.condition,
+          voice_transcript: patient.callNotes ?? "",
+          session_id: getSessionId(),
+        });
         if (!cancelled) setData(r);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Request failed");
@@ -42,7 +54,7 @@ export function AiLogicModal({
     return () => {
       cancelled = true;
     };
-  }, [open, patient, daysSince]);
+  }, [open, patient]);
 
   useEffect(() => {
     if (!open) return;
@@ -53,9 +65,8 @@ export function AiLogicModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const contributions = data?.top_shap_contributions ?? [];
-  const rationale = data?.clinical_rationale ?? {};
-  const maxAbs = Math.max(...contributions.map((c) => Math.abs(c.shap_value)), 1e-6);
+  const drivers = data?.top_drivers ?? [];
+  const maxW = Math.max(...drivers.map((d) => d.weight), 0.01);
 
   const node = (
     <AnimatePresence>
@@ -86,7 +97,7 @@ export function AiLogicModal({
               <div className="flex items-center gap-2 min-w-0">
                 <Brain className="w-5 h-5 text-violet-400 shrink-0" />
                 <h2 id="ai-logic-title" className="text-lg font-bold text-white truncate">
-                  Clinical drivers (SHAP)
+                  Clinical drivers (Gemini)
                 </h2>
               </div>
               <button
@@ -102,7 +113,8 @@ export function AiLogicModal({
               {loading && (
                 <div className="flex flex-col items-center justify-center gap-3 py-12 text-slate-400">
                   <Loader2 className="w-10 h-10 animate-spin text-emerald-500" />
-                  <p className="text-sm">Loading explainability from /predict/risk…</p>
+                  <p className="text-sm font-medium text-slate-300">Gemini is analyzing…</p>
+                  <p className="text-xs text-slate-500">Triage + FHIR RiskAssessment</p>
                 </div>
               )}
               {error && !loading && (
@@ -112,22 +124,20 @@ export function AiLogicModal({
               )}
               {!loading && !error && data && (
                 <>
-                  <p className="text-xs text-slate-500 mb-4">
-                    Risk {data.risk_score.toFixed(1)} · {data.risk_band}
+                  <p className="text-xs text-slate-500 mb-2">
+                    Risk {data.risk_score.toFixed(1)} · {data.risk_band} · {data.priority_level} (
+                    {data.priority_label})
                   </p>
-                  <ul className="space-y-4" aria-label="SHAP contributions">
-                    {contributions.map((c) => {
-                      const label = rationale[c.feature] ?? c.feature.replace(/_/g, " ");
-                      const w = (Math.abs(c.shap_value) / maxAbs) * 100;
-                      const increases = c.direction === "increases_risk";
+                  <p className="text-sm text-slate-300 mb-4 leading-relaxed">{data.clinical_rationale}</p>
+                  <ul className="space-y-4" aria-label="Top clinical drivers">
+                    {drivers.map((d) => {
+                      const w = (d.weight / maxW) * 100;
+                      const increases = d.direction === "increases_risk";
                       return (
-                        <li key={c.feature}>
+                        <li key={d.factor}>
                           <div className="flex justify-between text-xs text-slate-400 mb-1 gap-2">
-                            <span className="truncate">{label}</span>
-                            <span className={increases ? "text-rose-400" : "text-emerald-400"} tabular-nums>
-                              {c.shap_value >= 0 ? "+" : ""}
-                              {c.shap_value.toFixed(3)}
-                            </span>
+                            <span className="truncate font-medium text-slate-200">{d.factor}</span>
+                            <span className="tabular-nums text-slate-500">{d.weight.toFixed(2)}</span>
                           </div>
                           <div className="h-3 rounded-full bg-slate-800 overflow-hidden">
                             <div
@@ -135,15 +145,13 @@ export function AiLogicModal({
                               style={{ width: `${w}%` }}
                             />
                           </div>
-                          <span className="sr-only">
-                            {increases ? "Increases risk" : "Decreases risk"}
-                          </span>
+                          <p className="text-[10px] text-slate-500 mt-1">{d.note}</p>
                         </li>
                       );
                     })}
                   </ul>
                   <p className="text-[10px] text-slate-600 mt-4 leading-relaxed">
-                    Red = increases_risk · Green = decreases_risk (local SHAP on the risk model).
+                    Source: {data.source} — weights are model-relative (Gemini triage), not local SHAP.
                   </p>
                 </>
               )}

@@ -136,7 +136,10 @@ def score_slots(
         wh = _wait_hours(slot)
         base = _base_cost(wh, float(risk_score), risk_band)
         tie = _tie_break_cost(slot, preferred_doctor, language)
-        total = base + tie * 0.05  # keep tie-break subordinate
+        # Provider burnout pressure: crowded 2h windows increase objective cost (balances urgency vs load)
+        burnout_load = float(EXISTING_HIGH_RISK_PER_WINDOW.get(wk, 0))
+        burnout_pressure = burnout_load * 0.42 * (1.0 + float(urgency) / 5.0)
+        total = base + tie * 0.05 + burnout_pressure  # tie-break stays subordinate
         cap_ok = (not patient_high_risk) or (EXISTING_HIGH_RISK_PER_WINDOW.get(wk, 0) < 3)
         meta.append(
             {
