@@ -367,7 +367,7 @@ export function PatientRecords({ apiClient }) {
                 {selected.rationale && (
                   <section>
                     <h3 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                      Gemini rationale
+                      Clinical rationale
                     </h3>
                     <p className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 text-sm leading-relaxed text-slate-200">
                       {selected.rationale}

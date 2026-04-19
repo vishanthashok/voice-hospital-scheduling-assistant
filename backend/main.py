@@ -1,10 +1,7 @@
 """
-MediVoice AI 2.0 — clinical triage via AWS Bedrock and/or Google Gemini (lean FastAPI).
+MediVoice AI 2.0 — clinical triage via AWS Bedrock only (lean FastAPI).
 
-Triage backend (see _run_triage_llm):
-  - Set BEDROCK_MODEL_ID + AWS credentials → Bedrock (e.g. Claude on Bedrock)
-  - Or set GEMINI_API_KEY / GOOGLE_API_KEY → Gemini
-  - TRIAGE_BACKEND=bedrock|gemini|auto (default auto: prefers Bedrock if BEDROCK_MODEL_ID is set)
+Configure BEDROCK_MODEL_ID plus AWS credentials (or AWS_BEARER_TOKEN_BEDROCK).
 
 No silent rule-based fallback — caller must see the error.
 """
@@ -28,7 +25,7 @@ from pydantic import BaseModel, Field
 _ROOT = Path(__file__).resolve().parent
 _REPO = _ROOT.parent
 # override=True is critical: otherwise a stale user-level Windows env var
-# (e.g. an old invalid GEMINI_API_KEY) silently shadows the .env file's value.
+# silently shadows the .env file's values.
 load_dotenv(_REPO / ".env", override=True)
 load_dotenv(_ROOT / ".env", override=True)
 
@@ -37,20 +34,14 @@ logger = logging.getLogger("medivoice")
 
 DATA_DIR = _ROOT / "data"
 HISTORY_PATH = DATA_DIR / "triage_history.jsonl"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_TRIAGE_MODEL") or "gemini-1.5-flash"
 BEDROCK_MODEL_ID = (os.getenv("BEDROCK_MODEL_ID") or "").strip()
 _AWS_REGION = (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1").strip()
 
 # ── Key detection on import (so `uvicorn main:app` prints this banner once) ─
-_GEMINI_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-if _GEMINI_KEY:
-    print(f"GEMINI_API_KEY present (len={len(_GEMINI_KEY)}, model={GEMINI_MODEL})")
-else:
-    print("GEMINI_API_KEY not set — optional if using Bedrock only")
 if BEDROCK_MODEL_ID:
     print(f"BEDROCK_MODEL_ID={BEDROCK_MODEL_ID!r} region={_AWS_REGION!r}")
 else:
-    print("BEDROCK_MODEL_ID not set — optional if using Gemini only")
+    print("BEDROCK_MODEL_ID not set — triage will return 503 until configured")
 
 
 app = FastAPI(title="MediVoice AI 2.0", version="2.0.0")
@@ -172,7 +163,7 @@ class TriageOut(BaseModel):
     rationale: str
     top_drivers: list[str]
     differential: list[str] = Field(default_factory=list)
-    source: Literal["gemini", "bedrock"]
+    source: Literal["bedrock"]
 
 
 class ExportIn(BaseModel):
@@ -199,7 +190,7 @@ def _append_audit(record: dict[str, Any]) -> None:
         f.write(line)
 
 
-# ── Gemini (google-generativeai) — the ONLY triage path ─────────────────────
+# ── Triage prompt (Bedrock Messages API) ────────────────────────────────────
 
 _TRIAGE_SYSTEM = (
     "You are a Board-Certified Triage Nurse performing clinical reasoning for a "
@@ -243,7 +234,7 @@ def _coerce_str_list(raw: Any, fallback_keys: tuple[str, ...]) -> list[str]:
     return out
 
 
-def _normalize_triage_payload(data: dict[str, Any], *, source: Literal["gemini", "bedrock"]) -> dict[str, Any]:
+def _normalize_triage_payload(data: dict[str, Any], *, source: Literal["bedrock"]) -> dict[str, Any]:
     """Validate LLM JSON and return unified triage dict."""
     try:
         rs = int(round(float(data["risk_score"])))
@@ -281,35 +272,13 @@ def _normalize_triage_payload(data: dict[str, Any], *, source: Literal["gemini",
 
 
 def _run_triage_llm(transcript: str) -> dict[str, Any]:
-    """Dispatch to Bedrock and/or Gemini. Raises HTTPException if nothing configured."""
-    mode = (os.getenv("TRIAGE_BACKEND") or "auto").strip().lower()
-    has_bedrock = bool((os.getenv("BEDROCK_MODEL_ID") or "").strip())
-    has_gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-
-    if mode == "gemini":
-        if not has_gemini:
-            raise HTTPException(
-                status_code=503,
-                detail="TRIAGE_BACKEND=gemini but GEMINI_API_KEY / GOOGLE_API_KEY is missing.",
-            )
-        return _run_gemini_sync(transcript)
-    if mode == "bedrock":
-        if not has_bedrock:
-            raise HTTPException(
-                status_code=503,
-                detail="TRIAGE_BACKEND=bedrock but BEDROCK_MODEL_ID is missing.",
-            )
-        return _run_bedrock_sync(transcript)
-
-    # auto: prefer Bedrock when model id is set
-    if has_bedrock:
-        return _run_bedrock_sync(transcript)
-    if has_gemini:
-        return _run_gemini_sync(transcript)
-    raise HTTPException(
-        status_code=503,
-        detail="No triage AI: set BEDROCK_MODEL_ID (AWS Bedrock) or GEMINI_API_KEY.",
-    )
+    """Bedrock-only triage. Raises HTTPException if not configured."""
+    if not (os.getenv("BEDROCK_MODEL_ID") or "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="No triage AI: set BEDROCK_MODEL_ID and AWS credentials for Bedrock.",
+        )
+    return _run_bedrock_sync(transcript)
 
 
 def _run_bedrock_sync(transcript: str) -> dict[str, Any]:
@@ -376,72 +345,17 @@ def _run_bedrock_sync(transcript: str) -> dict[str, Any]:
     return _normalize_triage_payload(data, source="bedrock")
 
 
-def _run_gemini_sync(transcript: str) -> dict[str, Any]:
-    """Strict Gemini call. Raises HTTPException on any failure — no silent fallback."""
-    import google.generativeai as genai
-
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Connecting to AI… GEMINI_API_KEY is missing on the server.",
-        )
-
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            GEMINI_MODEL,
-            system_instruction=_TRIAGE_SYSTEM,
-            generation_config=genai.GenerationConfig(
-                temperature=0.2,
-                response_mime_type="application/json",
-            ),
-        )
-        prompt = (
-            "You are a Board-Certified Triage Nurse. Analyze this transcript:\n"
-            f'"""{transcript.strip()}"""\n'
-            "Return a JSON object with: risk_score (integer 0-100), "
-            "priority (P1/P2/P3), rationale (natural language), "
-            "3 top_drivers (e.g. 'Chest Pain', 'High HR'), "
-            "and 3 differential diagnoses to rule out (e.g. 'Acute Coronary Syndrome')."
-        )
-        resp = model.generate_content(prompt)
-        raw = (resp.text or "").strip()
-        if not raw:
-            raise RuntimeError("Gemini returned an empty response.")
-        data = json.loads(_strip_fence(raw))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Gemini call failed")
-        raise HTTPException(status_code=502, detail=f"Gemini call failed: {e}") from e
-
-    return _normalize_triage_payload(data, source="gemini")
-
-
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
 def _effective_triage_backend() -> str:
-    mode = (os.getenv("TRIAGE_BACKEND") or "auto").strip().lower()
-    hb = bool((os.getenv("BEDROCK_MODEL_ID") or "").strip())
-    hg = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-    if mode == "gemini":
-        return "gemini" if hg else "none"
-    if mode == "bedrock":
-        return "bedrock" if hb else "none"
-    if hb:
-        return "bedrock"
-    if hg:
-        return "gemini"
-    return "none"
+    return "bedrock" if (os.getenv("BEDROCK_MODEL_ID") or "").strip() else "none"
 
 
 @app.on_event("startup")
 async def _startup_banner() -> None:
     print(
         f"[medivoice] triage_backend={_effective_triage_backend()} "
-        f"gemini_model={GEMINI_MODEL} gemini_key={bool(_GEMINI_KEY)} "
         f"bedrock={bool(BEDROCK_MODEL_ID)}"
     )
 
@@ -449,17 +363,14 @@ async def _startup_banner() -> None:
 @app.get("/health")
 async def health():
     hb = bool((os.getenv("BEDROCK_MODEL_ID") or "").strip())
-    hg = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
     return {
         "status": "ok",
         "service": "medivoice-2",
         "triage_backend": _effective_triage_backend(),
-        "ai_configured": hb or hg,
+        "ai_configured": hb,
         "bedrock_model_id": os.getenv("BEDROCK_MODEL_ID") or None,
         "aws_region": _AWS_REGION,
         "bedrock_configured": hb,
-        "gemini_model": GEMINI_MODEL,
-        "gemini_configured": hg,
     }
 
 
@@ -501,7 +412,7 @@ async def triage(body: TriageIn):
 
 @app.post("/export")
 async def export_fhir(body: ExportIn) -> dict[str, Any]:
-    """Minimal valid FHIR R4 RiskAssessment built from live Gemini triage output."""
+    """Minimal valid FHIR R4 RiskAssessment built from live triage output."""
     rid = str(uuid.uuid4())[:8]
     pid = body.patient_id or "demo-patient"
     occurred = body.occurrence_datetime or _utc_now()

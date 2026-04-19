@@ -98,13 +98,13 @@ Four files, four responsibilities:
 
 ## Quick start
 
-You need a Gemini API key, a Twilio trial number, and three minutes.
+You need AWS Bedrock access (or a Bedrock API key), a Twilio trial number, and three minutes.
 
 ```bash
 # 1. Backend
 cd backend
 pip install -r requirements.txt
-# put GEMINI_API_KEY, TWILIO_*, and PUBLIC_BASE_URL in ../.env
+# put BEDROCK_MODEL_ID, AWS credentials, TWILIO_*, and PUBLIC_BASE_URL in ../.env
 python -m uvicorn main:app --reload --port 8000
 
 # 2. Frontend (separate terminal)
@@ -128,11 +128,10 @@ this repo runnable-at-a-glance.
 
 Things that bit us, preserved in the README so they don't bite you:
 
-- **`GEMINI_API_KEY` length 20 instead of 39.** A stale Windows
-  user-level env var was overriding `.env`. Fix: `load_dotenv(override=True)`
-  in `backend/main.py`, plus one PowerShell line to nuke the stale var.
-- **`limit: 0` on `gemini-2.0-flash`.** Free-tier quota is per-model;
-  `gemini-2.5-flash` worked instantly.
+- **Stale env vars overriding `.env`.** A Windows user-level variable can
+  shadow the file. Fix: `load_dotenv(override=True)` in `backend/main.py`.
+- **Bedrock model access.** Enable the model in AWS Console → Bedrock → Model access
+  before invoking.
 - **Twilio `<Gather action="/voice/gather">` (relative).** Twilio's
   cloud can't resolve relatives — the action must be absolute. We now
   build it from `PUBLIC_BASE_URL` at request time.

@@ -136,7 +136,6 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
     setDirty(true);
   };
 
-  const geminiPresent = !!health?.gemini_configured;
   const bedrockPresent = !!health?.bedrock_configured;
   const aiReady = !!health?.ai_configured;
   // The /health endpoint doesn't report twilio by design (keys stay server-side),
@@ -213,19 +212,18 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
                 </span>
               </div>
               <p className="mt-2 text-[11px] text-slate-500">
-                Bedrock: {bedrockPresent ? (health?.bedrock_model_id || "set") : "unset"} · Region{" "}
-                {health?.aws_region ?? "—"} · Gemini:{" "}
-                {geminiPresent ? health?.gemini_model || "key present" : "unset"}
+                Bedrock model: {bedrockPresent ? health?.bedrock_model_id || "set" : "unset"} · Region{" "}
+                {health?.aws_region ?? "—"}
               </p>
             </div>
             <MaskedKeyDisplay
-              label="GEMINI_API_KEY (optional)"
+              label="AWS Bedrock (BEDROCK_MODEL_ID + credentials)"
               icon={KeyRound}
-              present={geminiPresent}
+              present={bedrockPresent}
               hint={
-                geminiPresent
-                  ? `Using ${health?.gemini_model || "unknown"}.`
-                  : "Optional if BEDROCK_MODEL_ID is set on the server."
+                bedrockPresent
+                  ? `Using ${health?.bedrock_model_id || "configured model"}.`
+                  : "Set BEDROCK_MODEL_ID and AWS credentials in the server .env."
               }
             />
             <MaskedKeyDisplay
@@ -249,7 +247,7 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
               Backend connectivity
             </h2>
             <p className="text-[11px] text-slate-500">
-              Ping <span className="font-mono">/health</span> to verify FastAPI + Bedrock/Gemini + Twilio
+              Ping <span className="font-mono">/health</span> to verify FastAPI + Bedrock + Twilio
               webhooks are live.
             </p>
           </div>
@@ -284,10 +282,6 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
             <div className="flex items-center justify-between">
               <span className="text-slate-500">bedrock_model_id</span>
               <span className="text-right text-[10px]">{health?.bedrock_model_id ?? "—"}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">gemini_model</span>
-              <span>{health?.gemini_model ?? "—"}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-500">ai_configured</span>
@@ -460,8 +454,8 @@ export function SettingsPanel({ apiClient, prefs, onPrefsChange }) {
             </li>
             <li className="flex items-start gap-2">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-              Gemini is called with <span className="font-mono">temperature=0.2</span> and strict
-              JSON mode; no training on your data.
+              Bedrock is called with <span className="font-mono">temperature=0.2</span> and strict
+              JSON-shaped output; no training on your data.
             </li>
             <li className="flex items-start gap-2">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />

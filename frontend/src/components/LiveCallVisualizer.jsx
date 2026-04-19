@@ -60,7 +60,7 @@ export function LiveCallVisualizer({ onLiveChange }) {
         if (data.type === "triage_error") {
           setLiveTriage({
             error: true,
-            detail: data.detail || "Gemini call failed",
+            detail: data.detail || "Triage call failed",
           });
         }
         if (data.type === "call_ended" || data.type === "stt_empty") {
@@ -189,10 +189,10 @@ export function LiveCallVisualizer({ onLiveChange }) {
             </div>
           </div>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Gemini triage (from call)</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Live triage (from call)</p>
             {liveTriage?.error ? (
               <div className="mt-2 rounded-xl border border-rose-500/40 bg-rose-950/40 p-3 text-xs text-rose-200">
-                Gemini error: {liveTriage.detail}
+                Triage error: {liveTriage.detail}
               </div>
             ) : liveTriage ? (
               <div className="mt-2 space-y-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm">

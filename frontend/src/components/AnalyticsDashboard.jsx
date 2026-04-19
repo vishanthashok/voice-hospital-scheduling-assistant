@@ -188,7 +188,7 @@ export function AnalyticsDashboard({ apiClient }) {
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-white">Hospital analytics</h1>
           <p className="text-xs text-slate-500">
-            Operational intelligence derived from the Gemini audit log
+            Operational intelligence derived from the triage audit log
           </p>
         </div>
         <button
@@ -214,7 +214,7 @@ export function AnalyticsDashboard({ apiClient }) {
           tone="sky"
           label="Total triage volume"
           value={metrics.total}
-          sub="All time · Gemini-scored events"
+          sub="All time · scored events"
         />
         <StatCard
           icon={TrendingUp}
@@ -274,7 +274,7 @@ export function AnalyticsDashboard({ apiClient }) {
             <Activity className="h-4 w-4 text-amber-400" />
             Top symptoms
           </h2>
-          <p className="text-[11px] text-slate-500">Most frequent Gemini drivers</p>
+          <p className="text-[11px] text-slate-500">Most frequent clinical drivers</p>
           <ol className="mt-3 space-y-2">
             {metrics.topSymptoms.length === 0 && (
               <li className="text-xs text-slate-500">—</li>

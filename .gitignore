@@ -25,6 +25,6 @@ ml-backend/data/audit_log.json
 __pycache__/
 *.pyc
 
-# MediVoice backend local persistence (Gemini audit trail)
+# MediVoice backend local persistence (triage audit trail)
 backend/data/triage_history.jsonl
 backend/data/audit_log.jsonl

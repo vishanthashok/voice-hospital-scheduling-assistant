@@ -72,7 +72,7 @@ export function LoginScreen({ onAuthed }) {
               <span className="text-sky-300">on every call.</span>
             </h1>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-slate-400">
-              Gemini-powered triage scores every incoming call in seconds, ranks
+              AI triage (AWS Bedrock) scores every incoming call in seconds, ranks
               your queue by acuity, and ships the result as FHIR the moment the
               caller hangs up.
             </p>
@@ -84,7 +84,7 @@ export function LoginScreen({ onAuthed }) {
             </div>
             <div className="flex items-start gap-2">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-              <span>Zero-retention: transcripts never leave your Gemini tenant</span>
+              <span>Transcripts stay in your AWS account boundary when using Bedrock</span>
             </div>
             <div className="flex items-start gap-2">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />

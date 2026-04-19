@@ -208,7 +208,7 @@ export default function App() {
   const [patientTriage, setPatientTriage] = useState({});
   // Per-patient loading/error so the queue can show "Connecting to AI…" on each card.
   const [patientStatus, setPatientStatus] = useState({}); // { [id]: "loading" | "error" | "ok" }
-  // Master switch: when OFF, no automatic Gemini calls fire — protects quota while
+  // Master switch: when OFF, no automatic /triage calls fire — saves Bedrock usage while
   // debugging. Manual per-patient "Score now" still works. Persisted to localStorage.
   const [scoringEnabled, setScoringEnabled] = useState(() => {
     try {
@@ -274,7 +274,7 @@ export default function App() {
 
   // When scoring is enabled: pre-triage every patient (sequentially to respect free-tier
   // rate limits) so the Status Board can sort by acuity. When disabled, this effect is
-  // a no-op — protects Gemini quota while you're debugging unrelated UI.
+  // a no-op — protects Bedrock usage while you're debugging unrelated UI.
   useEffect(() => {
     if (!scoringEnabled) return;
     let cancelled = false;
@@ -522,11 +522,11 @@ export default function App() {
               </div>
               <p className="text-[11px] text-slate-500">
                 {scoringEnabled
-                  ? "Sorted by Gemini risk · highest first"
-                  : "Gemini scoring paused · no API calls are being made"}
+                  ? "Sorted by triage risk · highest first"
+                  : "Auto-scoring paused · no /triage calls are being made"}
               </p>
 
-              {/* Master switch so debugging doesn't burn Gemini tokens. Off by default. */}
+              {/* Master switch so debugging doesn't burn Bedrock invocations. Off by default. */}
               <div className="mt-2 flex items-center gap-2">
                 <button
                   type="button"
@@ -535,7 +535,7 @@ export default function App() {
                   title={
                     scoringEnabled
                       ? "Stop making /triage calls. Cached scores stay visible."
-                      : "Start scoring all patient cards with Gemini."
+                      : "Start scoring all patient cards via Bedrock."
                   }
                   className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition ${
                     scoringEnabled
@@ -546,12 +546,12 @@ export default function App() {
                   {scoringEnabled ? (
                     <>
                       <Pause className="h-3 w-3" />
-                      Gemini: ON
+                      Auto-score: ON
                     </>
                   ) : (
                     <>
                       <Play className="h-3 w-3" />
-                      Start Gemini scoring
+                      Start auto-scoring
                     </>
                   )}
                 </button>
@@ -567,7 +567,7 @@ export default function App() {
                         }
                       })();
                     }}
-                    title="Re-run Gemini on every patient (uses quota)"
+                    title="Re-run Bedrock triage on every patient"
                     className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-400 transition hover:border-slate-600 hover:text-slate-200"
                   >
                     <RefreshCw className="h-3 w-3" />
@@ -639,7 +639,7 @@ export default function App() {
                                   e.stopPropagation();
                                   void runTriage(p, { refreshSelected: false });
                                 }}
-                                title="Score this one patient with Gemini"
+                                title="Score this one patient with Bedrock"
                                 className="inline-flex items-center gap-1 rounded-md bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 hover:text-white"
                               >
                                 <Play className="h-2.5 w-2.5" />
@@ -703,7 +703,7 @@ export default function App() {
                     <Mic className="mx-auto h-12 w-12 text-slate-600" strokeWidth={1.25} />
                     <p className="mt-4 text-sm font-medium text-slate-300">No patient selected</p>
                     <p className="mt-1 max-w-xs text-xs text-slate-500">
-                      Choose a case from the status board to run Gemini triage and view the clinical record.
+                      Choose a case from the status board to run AI triage and view the clinical record.
                     </p>
                   </div>
                 </motion.div>
@@ -723,7 +723,7 @@ export default function App() {
                     >
                       <Loader2 className="h-10 w-10 animate-spin text-sky-400" />
                       <p className="mt-3 text-sm font-medium text-slate-200">Connecting to AI…</p>
-                      <p className="mt-1 text-xs text-slate-500">Gemini clinical orchestrator</p>
+                      <p className="mt-1 text-xs text-slate-500">AWS Bedrock triage</p>
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -833,7 +833,7 @@ export default function App() {
                       className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:bg-sky-400 min-[420px]:flex-initial"
                     >
                       <Play className="h-4 w-4" />
-                      Score with Gemini
+                      Score with Bedrock
                     </button>
                   )}
                   <button
