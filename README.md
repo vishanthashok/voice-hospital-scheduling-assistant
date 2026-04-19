@@ -148,7 +148,7 @@ Things that bit us, preserved in the README so they don't bite you:
   gated behind Twilio verified caller IDs on trial accounts.
 - **Better prompts** — calibrating the risk cutoffs against real
   historical triage outcomes.
-- **Deploy.** See [`DEPLOY.md`](DEPLOY.md) — **Fly.io** (API) + **Cloudflare Pages** (UI); GitHub Actions workflow included (add repo secrets, then push).
+- **Deploy.** See [`DEPLOY.md`](DEPLOY.md) — **Render** (API) + **Cloudflare Pages** (UI); optional GitHub Action for the frontend (secrets in repo settings).
 
 ## Under the hood (optional reading)
 

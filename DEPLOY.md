@@ -1,62 +1,54 @@
 # Deploy MediVoice
 
-**Why split hosting?** Cloudflare Pages is ideal for the **static** React app. The **API is Python (FastAPI)** — use a small container host (this repo targets **Fly.io** + **Cloudflare Pages**).
+**API:** [Render](https://render.com) (Python / FastAPI) — no Fly CLI, connect GitHub in the browser.  
+**Web:** [Cloudflare Pages](https://pages.cloudflare.com/) — optional GitHub Action builds and uploads the SPA.
 
 ---
 
-## Automated deploy (GitHub Actions)
+## 1. API on Render
 
-The workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) runs on every push to `main`. **Deployment still requires your accounts** — add secrets and complete one-time setup below.
+1. Sign up at [render.com](https://render.com) (GitHub login is fine).
+2. **New → Blueprint** → connect this repo → Render reads [`render.yaml`](render.yaml) and creates **medivoice-api**.  
+   *Or:* **New → Web Service** → same repo → **Root Directory** `backend` → **Build** `pip install -r requirements.txt` → **Start** `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+3. In the service **Environment**, set (minimum):
+   - `GEMINI_API_KEY`
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` (E.164)
+   - `PUBLIC_BASE_URL` = your API’s public URL (e.g. `https://medivoice-api.onrender.com`) — **no trailing slash**
+4. Wait until it’s **Live**, then open `https://<your-service>.onrender.com/health`.
 
-### One-time: Fly.io (API)
-
-1. Install [`flyctl`](https://fly.io/docs/hands-on/install-flyctl/), then `fly auth login`.
-2. Create the app name used in [`backend/fly.toml`](backend/fly.toml) (default **`medivoice-api`**), or change `app = "..."` in that file:
-   ```bash
-   flyctl apps create medivoice-api
-   ```
-3. Set production secrets on Fly:
-   ```bash
-   cd backend
-   flyctl secrets set GEMINI_API_KEY="..." TWILIO_ACCOUNT_SID="..." TWILIO_AUTH_TOKEN="..." TWILIO_PHONE_NUMBER="+1..." PUBLIC_BASE_URL="https://medivoice-api.fly.dev"
-   ```
-   Use your real **`PUBLIC_BASE_URL`** (Fly’s URL or `https://api.medivoice.us` after DNS).
-
-4. Create a deploy token for CI:
-   ```bash
-   flyctl tokens create deploy
-   ```
-   Add it as repository secret **`FLY_API_TOKEN`**.
-
-### One-time: Cloudflare Pages (web)
-
-1. Create a Pages project **`medivoice-web`** (or change the name in the workflow file).
-   - CLI: `npx wrangler pages project create medivoice-web`
-2. Create an **API token** with **Cloudflare Pages — Edit** (and **Account** read if needed). Add **`CLOUDFLARE_API_TOKEN`**.
-3. Copy **Account ID** from the Cloudflare dashboard → **`CLOUDFLARE_ACCOUNT_ID`**.
-4. Add **`VITE_API_BASE`** = your **API public HTTPS origin**, no trailing slash (e.g. `https://medivoice-api.fly.dev` or `https://api.medivoice.us`).
-
-### GitHub repository secrets
-
-| Secret | Purpose |
-|--------|---------|
-| `FLY_API_TOKEN` | `flyctl deploy` from CI |
-| `CLOUDFLARE_API_TOKEN` | Wrangler Pages deploy |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account |
-| `VITE_API_BASE` | Baked into the SPA at build time (must match API) |
-
-Push to `main` after these are set. **Actions** → **Deploy** → **Run workflow** also works manually.
-
-### Custom domain (`medivoice.us`)
-
-- **API:** Fly → **certificates** → add `api.medivoice.us` → CNAME at DNS.
-- **Web:** Pages → **medivoice-web** → **Custom domains** → `medivoice.us` / `www`.
-- Update **`PUBLIC_BASE_URL`** on Fly and **`VITE_API_BASE`** in GitHub secrets, then push or re-run the workflow.
+**Custom domain (`api.medivoice.us`):** Render → your service → **Settings → Custom Domain** → add hostname → put the CNAME in DNS.
 
 ---
 
-## Manual / other hosts
+## 2. Web on Cloudflare Pages (CI)
 
-Build `frontend/` with `VITE_API_BASE` set; run `backend/` with Uvicorn or Docker ([`backend/Dockerfile`](backend/Dockerfile)). [Railway](https://railway.app), [Cloud Run](https://cloud.google.com/run), etc. are fine.
+The workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) deploys **`frontend/`** to Pages when you push to `main`.
 
-**Twilio:** `POST https://<your-api>/voice/incoming` or `python scripts/set_twilio_webhook.py` with `PUBLIC_BASE_URL` in `.env`.
+**Repository secrets** (GitHub → **Settings → Secrets and variables → Actions**):
+
+| Secret | Example |
+|--------|--------|
+| `VITE_API_BASE` | `https://medivoice-api.onrender.com` (same origin as API; no `/` at end) |
+| `CLOUDFLARE_API_TOKEN` | API token with **Pages — Edit** |
+| `CLOUDFLARE_ACCOUNT_ID` | From Cloudflare dashboard |
+
+Create the Pages project once: `npx wrangler pages project create medivoice-web` or in the Cloudflare UI (name must match the workflow: **medivoice-web**).
+
+---
+
+## 3. Twilio
+
+Voice webhook: `POST https://<your-api-host>/voice/incoming`  
+Or run `python scripts/set_twilio_webhook.py` with `PUBLIC_BASE_URL` in `.env`.
+
+---
+
+## 4. Optional: `backend/Dockerfile`
+
+Useful if you deploy the API on **Cloud Run**, **Railway**, or another Docker host; Render can use native Python without it.
+
+---
+
+## Dropped: Fly.io
+
+We removed Fly-specific config. If you still have a `flyctl` login, you can ignore it for this project.
