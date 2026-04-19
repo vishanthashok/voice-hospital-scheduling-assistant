@@ -1,15 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
+import { LiveCallVisualizer } from "./components/LiveCallVisualizer";
 import {
   Activity,
+  BarChart3,
+  Bell,
   Calendar,
   CheckCircle2,
+  ClipboardList,
   Download,
   Flame,
   Loader2,
+  Search,
+  Settings,
   Stethoscope,
   Wifi,
+  Sparkles,
+  Mic,
 } from "lucide-react";
 
 /** Dev: Vite proxies /triage, /export, /health → FastAPI. Prod: set `VITE_API_BASE`. */
@@ -27,34 +35,43 @@ const MOCK_PATIENTS = [
     name: "Jordan Ellis",
     transcript:
       "I've had tightness in my chest since this morning and some shortness of breath when I walk upstairs.",
+    live: true,
+    minutesAgo: 4,
   },
   {
     id: "P002",
     name: "Sam Rivera",
     transcript:
       "Routine follow-up for hypertension; meds are fine, just need a refill and vitals check.",
+    live: false,
+    minutesAgo: 18,
   },
   {
     id: "P003",
     name: "Taylor Chen",
     transcript:
       "Fever 101 for two days, sore throat, worse when swallowing. No trouble breathing.",
+    live: true,
+    minutesAgo: 2,
   },
   {
     id: "P004",
     name: "Morgan Blake",
     transcript:
       "Chronic back pain flared after lifting; pain is sharp but I can still move my legs fine.",
+    live: false,
+    minutesAgo: 52,
   },
   {
     id: "P005",
     name: "Riley Park",
     transcript:
       "Anxiety and palpitations after coffee; feels like heart racing but no chest pain.",
+    live: false,
+    minutesAgo: 31,
   },
 ];
 
-/** Synthetic clinic load grid (demo — not live occupancy). */
 const HEAT_ROWS = ["9a", "10a", "11a", "1p", "2p", "3p"];
 const HEAT_COLS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
@@ -64,61 +81,187 @@ function hashLoad(seed, r, c) {
   return x % 101;
 }
 
-/** Mock CP-SAT–style ranked slots (deterministic from risk). */
+/** Emerald → rose blend by intensity 0–100 */
+function heatCellStyle(v) {
+  const t = v / 100;
+  const e = [16, 185, 129];
+  const r = [244, 63, 94];
+  const rgb = e.map((c, i) => Math.round(c + (r[i] - c) * t));
+  return { backgroundColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` };
+}
+
 function suggestedSlots(riskScore) {
   const base = [
-    { day: "Tuesday", time: "10:30 AM", doctor: "Dr. Patel", score: 0.92 },
-    { day: "Wednesday", time: "2:00 PM", doctor: "Dr. Vasquez", score: 0.88 },
-    { day: "Friday", time: "9:00 AM", doctor: "Dr. Chen", score: 0.81 },
+    { day: "Tuesday", time: "10:30 AM", doctor: "Dr. Patel", room: "Suite 3B" },
+    { day: "Wednesday", time: "2:00 PM", doctor: "Dr. Vasquez", room: "Telehealth" },
+    { day: "Friday", time: "9:00 AM", doctor: "Dr. Chen", room: "Clinic A" },
   ];
-  const urgency = riskScore >= 70 ? "earliest feasible" : "balanced wait";
+  const urgency = riskScore >= 70 ? "Earliest feasible window" : "Balanced wait · CP-SAT";
   return base.map((s, i) => ({
     ...s,
-    label: `${s.day} · ${s.time} · ${s.doctor}`,
-    note: `OR-Tools CP-SAT (${urgency}) · rank ${i + 1}`,
+    subtitle: `${urgency} · rank ${i + 1}`,
   }));
 }
 
-function badgeForRisk(score) {
-  if (score >= 75) return { label: "P1", bg: "#FEE2E2", fg: "#991B1B", border: "#FECACA" };
-  if (score >= 45) return { label: "P2", bg: "#FEF3C7", fg: "#92400E", border: "#FDE68A" };
-  return { label: "P3", bg: "#D1FAE5", fg: "#065F46", border: "#A7F3D0" };
+function formatCalled(mins) {
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `Called ${mins}m ago`;
+  const h = Math.floor(mins / 60);
+  return `Called ${h}h ago`;
 }
 
+/** Risk color mapping — Red 75+, Orange 40-74, Green <40. */
+function riskTone(score) {
+  if (score == null || Number.isNaN(score)) {
+    return {
+      text: "text-slate-400",
+      bg: "bg-slate-800/60",
+      ring: "ring-slate-700",
+      bar: "from-slate-500 to-slate-400",
+      label: "PENDING",
+    };
+  }
+  if (score >= 75) {
+    return {
+      text: "text-rose-300",
+      bg: "bg-rose-500/15",
+      ring: "ring-rose-500/40",
+      bar: "from-rose-500 to-rose-400",
+      label: "CRITICAL",
+    };
+  }
+  if (score >= 40) {
+    return {
+      text: "text-orange-300",
+      bg: "bg-orange-500/15",
+      ring: "ring-orange-500/40",
+      bar: "from-amber-500 to-orange-400",
+      label: "ELEVATED",
+    };
+  }
+  return {
+    text: "text-emerald-300",
+    bg: "bg-emerald-500/15",
+    ring: "ring-emerald-500/30",
+    bar: "from-emerald-500 to-emerald-400",
+    label: "ROUTINE",
+  };
+}
+
+function RiskGauge({ value }) {
+  const v = Math.max(0, Math.min(100, value));
+  const tone = riskTone(v);
+  return (
+    <div className="rounded-2xl border border-slate-700/50 bg-slate-950/40 p-4">
+      <p className={`text-center text-5xl font-bold tabular-nums tracking-tight ${tone.text}`}>
+        {v.toFixed(0)}
+        <span className="text-xl font-semibold text-slate-500">/100</span>
+      </p>
+      <p className="text-center text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+        Clinical risk index
+      </p>
+      <div className="mt-4 h-4 overflow-hidden rounded-full bg-slate-800 ring-1 ring-slate-700/80">
+        <div
+          className={`h-full rounded-full bg-gradient-to-r ${tone.bar} transition-[width] duration-700 ease-out`}
+          style={{ width: `${v}%` }}
+        />
+      </div>
+      <div className="mt-2 flex justify-between text-[9px] font-medium uppercase tracking-wider text-slate-600">
+        <span className="text-emerald-500/90">Low &lt;40</span>
+        <span className="text-orange-400/90">Elevated 40-74</span>
+        <span className="text-rose-500/90">Critical 75+</span>
+      </div>
+    </div>
+  );
+}
+
+const NAV = [
+  { id: "triage", label: "Triage Desk", icon: Stethoscope },
+  { id: "records", label: "Patient Records", icon: ClipboardList },
+  { id: "analytics", label: "Analytics", icon: BarChart3 },
+  { id: "settings", label: "Settings", icon: Settings },
+];
+
 export default function App() {
-  const [selected, setSelected] = useState(MOCK_PATIENTS[0]);
+  const [selected, setSelected] = useState(null);
+  const [activeNav, setActiveNav] = useState("triage");
   const [triage, setTriage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [resolved, setResolved] = useState({});
   const [health, setHealth] = useState(null);
+  const [twilioLive, setTwilioLive] = useState(false);
+  // Cache of triage results per patient id, for sorting + card badges.
+  const [patientTriage, setPatientTriage] = useState({});
+  // Per-patient loading/error so the queue can show "Connecting to AI…" on each card.
+  const [patientStatus, setPatientStatus] = useState({}); // { [id]: "loading" | "error" | "ok" }
+  const searchRef = useRef(null);
 
   const heatSeed = useMemo(
     () => Math.floor((triage?.risk_score ?? 40) * 100) % 1000,
     [triage?.risk_score]
   );
 
-  const runTriage = useCallback(async (patient) => {
-    setLoading(true);
-    setErr(null);
-    setTriage(null);
+  const highRiskAlert =
+    twilioLive || (triage && (triage.priority === "P1" || triage.risk_score >= 75));
+
+  const runTriage = useCallback(async (patient, { refreshSelected = true } = {}) => {
+    if (!patient) return null;
+    if (refreshSelected) {
+      setLoading(true);
+      setErr(null);
+    }
+    setPatientStatus((s) => ({ ...s, [patient.id]: "loading" }));
     try {
       const { data } = await client.post("/triage", {
         voice_transcript: patient.transcript,
         patient_id: patient.id,
         patient_name: patient.name,
       });
-      setTriage(data);
+      setPatientTriage((m) => ({ ...m, [patient.id]: data }));
+      setPatientStatus((s) => ({ ...s, [patient.id]: "ok" }));
+      if (refreshSelected) setTriage(data);
+      return data;
     } catch (e) {
-      setErr(e?.response?.data?.detail ?? e?.message ?? "Triage failed");
+      const detail = e?.response?.data?.detail ?? e?.message ?? "Triage failed";
+      setPatientStatus((s) => ({ ...s, [patient.id]: "error" }));
+      if (refreshSelected) setErr(detail);
+      return null;
     } finally {
-      setLoading(false);
+      if (refreshSelected) setLoading(false);
     }
   }, []);
 
+  // Re-run triage when user selects a patient so they always see the latest model output.
   useEffect(() => {
-    void runTriage(selected);
+    if (selected) void runTriage(selected, { refreshSelected: true });
   }, [selected, runTriage]);
+
+  // On mount: pre-triage every patient (sequentially to respect free-tier rate limits)
+  // so the Status Board can display scores and sort by acuity immediately.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const p of MOCK_PATIENTS) {
+        if (cancelled) return;
+        await runTriage(p, { refreshSelected: false });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runTriage]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -135,24 +278,38 @@ export default function App() {
     };
   }, [triage]);
 
+  // Sort: highest risk first. Patients without a score yet go to the bottom
+  // but keep their original order (stable sort). Resolved patients sink.
+  const orderedPatients = useMemo(() => {
+    return [...MOCK_PATIENTS]
+      .map((p, idx) => ({ p, idx, t: patientTriage[p.id], r: resolved[p.id] }))
+      .sort((a, b) => {
+        if (!!a.r !== !!b.r) return a.r ? 1 : -1;
+        const sa = a.t?.risk_score ?? -1;
+        const sb = b.t?.risk_score ?? -1;
+        if (sb !== sa) return sb - sa;
+        return a.idx - b.idx;
+      })
+      .map((x) => x.p);
+  }, [patientTriage, resolved]);
+
   const slots = useMemo(
     () => suggestedSlots(triage?.risk_score ?? 40),
     [triage?.risk_score]
   );
 
   const downloadFhir = async () => {
-    if (!triage) return;
+    if (!triage || !selected) return;
     try {
       const { data } = await client.post("/export", {
         patient_id: selected.id,
         patient_name: selected.name,
         risk_score: triage.risk_score,
         priority: triage.priority,
-        clinical_rationale: triage.clinical_rationale,
+        rationale: triage.rationale,
+        top_drivers: triage.top_drivers ?? [],
       });
-      const blob = new Blob([JSON.stringify(data, null, 2)], {
-        type: "application/fhir+json",
-      });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/fhir+json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -160,355 +317,445 @@ export default function App() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setErr(e?.message ?? "Export failed");
+      setErr(e?.response?.data?.detail ?? e?.message ?? "Export failed");
     }
   };
 
   const markResolved = () => {
+    if (!selected) return;
     setResolved((r) => ({ ...r, [selected.id]: true }));
   };
 
-  const badge = triage ? badgeForRisk(triage.risk_score) : { label: "—", bg: "#F3F4F6", fg: "#6B7280", border: "#E5E7EB" };
+  const nowLabel = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   return (
-    <div style={styles.shell}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; }
-        body { margin: 0; font-family: Inter, system-ui, -apple-system, sans-serif; background: #f2f2f7; color: #1c1c1e; }
-      `}</style>
+    <div className="flex min-h-screen bg-slate-950 text-slate-100">
+      {/* Slim sidebar */}
+      <aside className="flex w-[72px] shrink-0 flex-col items-center border-r border-slate-800/80 bg-slate-950 py-6">
+        <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/20 text-sky-400 ring-1 ring-sky-500/30">
+          <Stethoscope className="h-5 w-5" strokeWidth={2} />
+        </div>
+        <nav className="flex flex-1 flex-col gap-2">
+          {NAV.map((item) => {
+            const Icon = item.icon;
+            const on = activeNav === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                title={item.label}
+                onClick={() => setActiveNav(item.id)}
+                className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all ${
+                  on
+                    ? "bg-sky-500 text-white shadow-lg shadow-sky-500/25"
+                    : "text-slate-500 hover:bg-slate-800/80 hover:text-slate-200"
+                }`}
+              >
+                <Icon className="h-5 w-5" strokeWidth={on ? 2.25 : 2} />
+              </button>
+            );
+          })}
+        </nav>
+        <div className="mt-auto rounded-lg border border-slate-800 p-1.5 text-[9px] text-slate-600">v2.0</div>
+      </aside>
 
-      <header style={styles.header}>
-        <div style={styles.brand}>
-          <Stethoscope style={{ width: 28, height: 28, color: "#007aff" }} />
-          <div>
-            <div style={styles.brandKicker}>MediVoice AI 2.0</div>
-            <h1 style={styles.title}>Patient–Doctor Link</h1>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Top bar */}
+        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-slate-800/80 bg-slate-950/90 px-6 backdrop-blur-md">
+          <div className="relative max-w-xl flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              ref={searchRef}
+              type="search"
+              placeholder="Search patients, symptoms, or records…"
+              className="w-full rounded-xl border border-slate-800 bg-slate-900/80 py-2.5 pl-10 pr-24 text-sm text-slate-200 placeholder:text-slate-500 focus:border-sky-500/50 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+            />
+            <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 sm:flex">
+              ⌘K
+            </kbd>
           </div>
-        </div>
-        <div style={styles.headerActions}>
-          <button type="button" style={styles.btnGhost} onClick={() => void downloadFhir()} disabled={!triage || loading}>
-            <Download size={16} /> Download FHIR
-          </button>
-          <button type="button" style={styles.btnPrimary} onClick={markResolved} disabled={!triage}>
-            <CheckCircle2 size={16} /> Mark resolved
-          </button>
-          <button
-            type="button"
-            style={styles.btnGhost}
-            onClick={() => {
-              client.get("/health").then((r) => setHealth(r.data)).catch(() => setHealth({ status: "offline" }));
-            }}
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              type="button"
+              className="relative rounded-xl p-2 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+              aria-label="Notifications"
+            >
+              <Bell className="h-5 w-5" />
+              {highRiskAlert && (
+                <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-slate-950" />
+              )}
+            </button>
+            <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 py-1.5 pl-2 pr-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 text-xs font-bold text-white">
+                MD
+              </div>
+              <div className="hidden text-left sm:block">
+                <p className="text-xs font-semibold text-slate-200">Dr. Morgan</p>
+                <p className="text-[10px] text-slate-500">Attending · ED</p>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {err && (
+          <div
+            className="mx-6 mt-4 rounded-xl border border-rose-500/40 bg-rose-950/40 px-4 py-3 text-sm text-rose-200"
+            role="alert"
           >
-            <Wifi size={16} /> System status
-          </button>
-        </div>
-      </header>
+            {String(err)}
+          </div>
+        )}
 
-      {err && (
-        <div style={styles.errorBanner} role="alert">
-          {String(err)}
-        </div>
-      )}
+        <LiveCallVisualizer onLiveChange={setTwilioLive} />
 
-      <div style={styles.grid}>
-        {/* Col 1 — Queue */}
-        <section style={styles.card}>
-          <h2 style={styles.h2}>Incoming</h2>
-          <p style={styles.muted}>Voice intake queue — select a patient</p>
-          <ul style={styles.queue}>
-            {MOCK_PATIENTS.map((p) => {
-              const active = p.id === selected.id;
-              const done = resolved[p.id];
-              return (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSelected(p)}
-                    style={{
-                      ...styles.queueItem,
-                      ...(active ? styles.queueItemActive : {}),
-                      opacity: done ? 0.55 : 1,
-                    }}
-                  >
-                    <div style={styles.queueRow}>
-                      <span style={styles.pName}>{p.name}</span>
-                      {p.id === selected.id && triage && (
-                        <span
-                          style={{
-                            ...styles.badge,
-                            background: badge.bg,
-                            color: badge.fg,
-                            borderColor: badge.border,
-                          }}
-                        >
-                          {triage.priority} · {Math.round(triage.risk_score)}
-                        </span>
+        <main className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-12 lg:p-6">
+          {/* Status board */}
+          <section className="flex flex-col rounded-2xl border border-slate-800/80 bg-slate-900/40 shadow-sm lg:col-span-3">
+            <div className="border-b border-slate-800/80 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold tracking-tight text-slate-100">Status board</h2>
+                {twilioLive && (
+                  <span className="relative inline-flex items-center gap-1.5 rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-300 ring-1 ring-sky-500/40">
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-60" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-400" />
+                    </span>
+                    Live call
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500">Sorted by Gemini risk · highest first</p>
+            </div>
+            <ul className="max-h-[min(70vh,640px)] flex-1 space-y-2 overflow-y-auto p-3">
+              <AnimatePresence initial={false}>
+                {orderedPatients.map((p) => {
+                  const active = selected?.id === p.id;
+                  const done = resolved[p.id];
+                  const t = patientTriage[p.id];
+                  const status = patientStatus[p.id];
+                  const score = t?.risk_score;
+                  const tone = riskTone(score);
+                  return (
+                    <motion.li
+                      key={p.id}
+                      layout
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ type: "spring", stiffness: 420, damping: 34 }}
+                    >
+                      <motion.button
+                        type="button"
+                        onClick={() => setSelected(p)}
+                        whileHover={{ scale: 1.01 }}
+                        whileTap={{ scale: 0.99 }}
+                        className={`relative w-full rounded-xl border px-3 py-3 text-left transition-shadow ${
+                          active
+                            ? "border-sky-500/60 bg-slate-800/90 shadow-lg shadow-sky-500/10"
+                            : "border-slate-800/80 bg-slate-900/50 shadow-sm hover:border-slate-700 hover:shadow-md"
+                        } ${done ? "opacity-50" : ""}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-100">{p.name}</span>
+                              {p.live && (
+                                <span className="relative flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400 ring-1 ring-emerald-500/30">
+                                  <span className="relative flex h-2 w-2">
+                                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                                  </span>
+                                  Live
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-[11px] text-slate-500">{p.id}</p>
+                          </div>
+                          {/* Prominent numerical risk badge */}
+                          <div
+                            className={`shrink-0 rounded-xl px-2.5 py-1 text-right ring-1 ${tone.bg} ${tone.ring}`}
+                          >
+                            {status === "loading" && score == null ? (
+                              <div className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                AI…
+                              </div>
+                            ) : status === "error" && score == null ? (
+                              <div className="text-[10px] font-bold text-rose-300">API ERROR</div>
+                            ) : (
+                              <>
+                                <div className={`font-mono text-lg font-extrabold leading-none tabular-nums ${tone.text}`}>
+                                  {Math.round(score)}
+                                  <span className="text-[10px] font-semibold text-slate-500">/100</span>
+                                </div>
+                                <div className={`mt-0.5 text-[9px] font-bold tracking-wider ${tone.text}`}>
+                                  {t?.priority ? `${t.priority} · ${tone.label}` : tone.label}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        {/* Bottom accent bar shows risk magnitude at a glance */}
+                        {score != null && (
+                          <div className="mt-2 h-1 overflow-hidden rounded-full bg-slate-800">
+                            <div
+                              className={`h-full rounded-full bg-gradient-to-r ${tone.bar}`}
+                              style={{ width: `${Math.max(4, Math.min(100, score))}%` }}
+                            />
+                          </div>
+                        )}
+                        <p className="mt-2 text-[11px] text-slate-500">{formatCalled(p.minutesAgo)}</p>
+                        {done && <p className="mt-1 text-[10px] font-medium text-emerald-400">Resolved</p>}
+                      </motion.button>
+                    </motion.li>
+                  );
+                })}
+              </AnimatePresence>
+            </ul>
+          </section>
+
+          {/* Clinical workspace */}
+          <section className="relative flex min-h-[520px] flex-col overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-b from-slate-900/80 to-slate-950 shadow-sm lg:col-span-6">
+            <div className="border-b border-slate-800/60 px-5 py-4 backdrop-blur-xl">
+              <div className="flex items-center gap-2 text-slate-400">
+                <Sparkles className="h-4 w-4 text-sky-400" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider">Clinical workspace</span>
+              </div>
+              <h1 className="mt-1 text-lg font-semibold text-white">
+                {selected ? selected.name : "No patient selected"}
+              </h1>
+              {selected && <p className="text-xs text-slate-500">{selected.id}</p>}
+            </div>
+
+            <AnimatePresence mode="wait">
+              {!selected && (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-1 flex-col items-center justify-center gap-4 px-8 py-20 text-center"
+                >
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-8 shadow-sm">
+                    <Mic className="mx-auto h-12 w-12 text-slate-600" strokeWidth={1.25} />
+                    <p className="mt-4 text-sm font-medium text-slate-300">No patient selected</p>
+                    <p className="mt-1 max-w-xs text-xs text-slate-500">
+                      Choose a case from the status board to run Gemini triage and view the clinical record.
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {selected && (
+              <div className="relative flex-1 overflow-y-auto p-5">
+                <AnimatePresence>
+                  {loading && (
+                    <motion.div
+                      key="load"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/70 backdrop-blur-md"
+                    >
+                      <Loader2 className="h-10 w-10 animate-spin text-sky-400" />
+                      <p className="mt-3 text-sm font-medium text-slate-200">Connecting to AI…</p>
+                      <p className="mt-1 text-xs text-slate-500">Gemini clinical orchestrator</p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Dictation + transcript bubble */}
+                <div className="mb-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-4 shadow-sm backdrop-blur-md">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Dictation · voice transcript
+                    </span>
+                    <span className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                      {nowLabel}
+                    </span>
+                  </div>
+                  <div className="rounded-2xl rounded-tl-sm border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm leading-relaxed text-slate-200 shadow-inner">
+                    {selected.transcript}
+                  </div>
+                </div>
+
+                {/* Reasoning + gauge */}
+                <div className="mb-6 rounded-2xl border border-slate-800/80 bg-slate-900/40 p-5 shadow-sm backdrop-blur-sm">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">AI reasoning flow</p>
+                  <div className="mt-4 grid gap-6 md:grid-cols-2">
+                    <div>
+                      <RiskGauge value={triage?.risk_score ?? 0} />
+                      {triage?.top_drivers?.length ? (
+                        <div className="mt-4">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                            Top clinical drivers
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {triage.top_drivers.map((d, i) => (
+                              <span
+                                key={`${d}-${i}`}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-[11px] font-medium text-slate-200"
+                              >
+                                <span className="text-[9px] font-bold text-sky-400">{i + 1}</span>
+                                {d}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-col justify-center space-y-3">
+                      <div className="flex items-center gap-2 text-xs text-slate-400">
+                        <span className="h-px flex-1 bg-gradient-to-r from-sky-500/50 to-transparent" />
+                        <span>Rationale</span>
+                      </div>
+                      <p className="text-sm leading-relaxed text-slate-300">
+                        {triage?.rationale ?? (loading ? "Connecting to AI…" : "—")}
+                      </p>
+                      {triage?.priority && (
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`rounded-lg px-2.5 py-1 text-xs font-bold ${
+                              triage.priority === "P1"
+                                ? "bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40"
+                                : triage.priority === "P2"
+                                  ? "bg-orange-500/15 text-orange-200 ring-1 ring-orange-500/30"
+                                  : "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30"
+                            }`}
+                          >
+                            Priority {triage.priority}
+                          </span>
+                          <span className="text-[10px] uppercase tracking-wider text-slate-600">
+                            Source: {triage.source}
+                          </span>
+                        </div>
                       )}
                     </div>
-                    <span style={styles.pId}>{p.id}</span>
-                    {done && <span style={styles.resolvedTag}>Resolved</span>}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void downloadFhir()}
+                    disabled={!triage || loading}
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40 min-[420px]:flex-initial"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download FHIR
                   </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
+                  <button
+                    type="button"
+                    onClick={markResolved}
+                    disabled={!triage}
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-600 bg-slate-800/80 px-5 py-3 text-sm font-semibold text-slate-100 shadow-sm transition hover:bg-slate-800 disabled:opacity-40 min-[420px]:flex-initial"
+                  >
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                    Mark resolved
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => client.get("/health").then((r) => setHealth(r.data)).catch(() => setHealth({ status: "offline" }))}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-400 transition hover:border-slate-600 hover:text-slate-200"
+                  >
+                    <Wifi className="h-4 w-4" />
+                    System status
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
 
-        {/* Col 2 — Detail */}
-        <section style={{ ...styles.card, position: "relative", minHeight: 480 }}>
-          <AnimatePresence mode="wait">
-            {loading && (
-              <motion.div
-                key="load"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                style={styles.overlay}
+          {/* Load intelligence */}
+          <section className="flex flex-col rounded-2xl border border-slate-800/80 bg-slate-900/40 shadow-sm lg:col-span-3">
+            <div className="border-b border-slate-800/80 px-4 py-3">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                <Flame className="h-4 w-4 text-orange-400" />
+                Load intelligence
+              </h2>
+              <p className="text-[11px] text-slate-500">Synthetic occupancy · demo</p>
+            </div>
+            <div className="overflow-x-auto p-3">
+              <div
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: `44px repeat(${HEAT_COLS.length}, minmax(0,1fr))` }}
               >
-                <Loader2 className="spin" size={40} color="#007aff" />
-                <p style={styles.overlayText}>Gemini orchestrator…</p>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } } .spin { animation: spin 0.9s linear infinite; }`}</style>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                <div />
+                {HEAT_COLS.map((d) => (
+                  <div key={d} className="text-center text-[10px] font-bold uppercase text-slate-500">
+                    {d}
+                  </div>
+                ))}
+                {HEAT_ROWS.map((t, ri) => (
+                  <div key={t} style={{ display: "contents" }}>
+                    <div className="flex items-center text-[10px] font-mono text-slate-500">{t}</div>
+                    {HEAT_COLS.map((_, ci) => {
+                      const v = hashLoad(heatSeed, ri, ci);
+                      return (
+                        <div
+                          key={`${t}-${ci}`}
+                          title={`Load ${v}`}
+                          style={heatCellStyle(v)}
+                          className="flex aspect-square min-h-[32px] items-center justify-center rounded-lg text-[10px] font-bold text-white/90 shadow-sm ring-1 ring-black/10"
+                        >
+                          {v}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
 
-          <h2 style={styles.h2}>{selected.name}</h2>
-          <p style={styles.muted}>{selected.id}</p>
-
-          <div style={styles.block}>
-            <div style={styles.label}>Voice transcript</div>
-            <p style={styles.bodyText}>{selected.transcript}</p>
-          </div>
-
-          <div style={styles.block}>
-            <div style={styles.label}>Gemini reasoning</div>
-            <p style={styles.bodyText}>{triage?.clinical_rationale ?? "—"}</p>
-          </div>
-
-          <div style={styles.block}>
-            <div style={styles.label}>Next steps</div>
-            <p style={styles.bodyText}>{triage?.next_steps ?? "—"}</p>
-            {triage?.source && (
-              <p style={styles.tiny}>Source: {triage.source}</p>
-            )}
-          </div>
-        </section>
-
-        {/* Col 3 — Heatmap + slots */}
-        <section style={styles.card}>
-          <h2 style={styles.h2}>
-            <Flame size={18} style={{ verticalAlign: "-3px", marginRight: 6 }} />
-            Clinic load
-          </h2>
-          <p style={styles.muted}>Synthetic occupancy heat — demo only</p>
-          <div style={styles.heatWrap}>
-            <div style={styles.heatGrid}>
-              <div />
-              {HEAT_COLS.map((d) => (
-                <div key={d} style={styles.heatHead}>
-                  {d}
-                </div>
-              ))}
-              {HEAT_ROWS.map((t, ri) => (
-                <div key={t} style={{ display: "contents" }}>
-                  <div style={styles.heatTime}>{t}</div>
-                  {HEAT_COLS.map((_, ci) => {
-                    const v = hashLoad(heatSeed, ri, ci);
-                    const bg =
-                      v < 30 ? "#D1FAE5" : v < 60 ? "#FEF3C7" : v < 85 ? "#FECACA" : "#FCA5A5";
-                    return (
-                      <div key={`${t}-${ci}`} style={{ ...styles.heatCell, background: bg }} title={`Load ${v}`}>
-                        {v}
+            <div className="border-t border-slate-800/80 px-4 py-3">
+              <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+                <Calendar className="h-3.5 w-3.5 text-sky-400" />
+                Suggested slots
+              </h3>
+              <p className="mt-0.5 text-[10px] text-slate-500">OR-Tools CP-SAT · calendar-style</p>
+            </div>
+            <ul className="space-y-3 p-3 pt-0">
+              {slots.map((s) => (
+                <li
+                  key={`${s.day}-${s.time}`}
+                  className="overflow-hidden rounded-xl border border-slate-700/80 bg-slate-900/60 shadow-sm"
+                >
+                  <div className="border-l-4 border-sky-500 px-3 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-medium uppercase tracking-wide text-sky-400/90">{s.day}</p>
+                        <p className="text-sm font-semibold text-white">{s.time}</p>
+                        <p className="text-xs text-slate-400">{s.doctor}</p>
+                        <p className="mt-1 text-[10px] text-slate-500">{s.room} · {s.subtitle}</p>
                       </div>
-                    );
-                  })}
-                </div>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg bg-sky-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-md shadow-sky-500/20 transition hover:bg-sky-400"
+                      >
+                        Quick book
+                      </button>
+                    </div>
+                  </div>
+                </li>
               ))}
-            </div>
-          </div>
+            </ul>
 
-          <h3 style={{ ...styles.h2, marginTop: 24, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
-            <Calendar size={16} />
-            Suggested slots
-          </h3>
-          <p style={styles.muted}>Ranked by OR-Tools CP-SAT (demo schedule)</p>
-          <ul style={styles.slotList}>
-            {slots.map((s) => (
-              <li key={s.label} style={styles.slotItem}>
-                <div style={styles.slotTitle}>{s.label}</div>
-                <div style={styles.slotNote}>{s.note}</div>
-              </li>
-            ))}
-          </ul>
-
-          <div style={styles.statusCard}>
-            <Activity size={16} />
-            <div>
-              <div style={styles.statusLabel}>API</div>
-              <pre style={styles.pre}>{JSON.stringify(health ?? {}, null, 0)}</pre>
+            <div className="mt-auto border-t border-slate-800/80 p-3">
+              <div className="flex gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                <Activity className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase text-slate-500">API</p>
+                  <pre className="mt-1 max-h-24 overflow-auto text-[10px] leading-snug text-slate-500">
+                    {JSON.stringify(health ?? {}, null, 0)}
+                  </pre>
+                </div>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </main>
       </div>
     </div>
   );
 }
-
-const styles = {
-  shell: { minHeight: "100vh", padding: "24px 28px 48px" },
-  header: {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: 16,
-    marginBottom: 24,
-  },
-  brand: { display: "flex", alignItems: "center", gap: 14 },
-  brandKicker: { fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", color: "#8e8e93", textTransform: "uppercase" },
-  title: { margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em" },
-  headerActions: { display: "flex", flexWrap: "wrap", gap: 10 },
-  btnPrimary: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "10px 16px",
-    borderRadius: 12,
-    border: "none",
-    background: "#007aff",
-    color: "#fff",
-    fontWeight: 600,
-    fontSize: 14,
-    cursor: "pointer",
-  },
-  btnGhost: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "10px 16px",
-    borderRadius: 12,
-    border: "1px solid #d1d1d6",
-    background: "#fff",
-    fontWeight: 600,
-    fontSize: 14,
-    cursor: "pointer",
-  },
-  errorBanner: {
-    background: "#FEF2F2",
-    border: "1px solid #FECACA",
-    color: "#991B1B",
-    padding: "12px 16px",
-    borderRadius: 12,
-    marginBottom: 16,
-    fontSize: 14,
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "minmax(260px, 1fr) minmax(320px, 1.2fr) minmax(280px, 1fr)",
-    gap: 20,
-    alignItems: "start",
-  },
-  card: {
-    background: "#fff",
-    borderRadius: 20,
-    padding: "20px 20px 24px",
-    boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
-    border: "1px solid #e5e5ea",
-  },
-  h2: { margin: "0 0 4px 0", fontSize: 17, fontWeight: 700 },
-  muted: { margin: "0 0 16px 0", fontSize: 13, color: "#8e8e93" },
-  queue: { listStyle: "none", margin: 0, padding: 0, maxHeight: 520, overflowY: "auto" },
-  queueItem: {
-    width: "100%",
-    textAlign: "left",
-    padding: "12px 14px",
-    borderRadius: 14,
-    border: "1px solid #e5e5ea",
-    background: "#fafafa",
-    marginBottom: 10,
-    cursor: "pointer",
-  },
-  queueItemActive: {
-    borderColor: "#007aff",
-    background: "#f0f7ff",
-    boxShadow: "0 0 0 1px #007aff22",
-  },
-  queueRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 },
-  pName: { fontWeight: 600, fontSize: 14 },
-  pId: { fontSize: 12, color: "#8e8e93", marginTop: 4, display: "block" },
-  resolvedTag: { fontSize: 11, color: "#059669", fontWeight: 600, marginTop: 6, display: "inline-block" },
-  badge: {
-    fontSize: 11,
-    fontWeight: 700,
-    padding: "4px 8px",
-    borderRadius: 8,
-    border: "1px solid",
-  },
-  block: { marginBottom: 20 },
-  label: {
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-    color: "#8e8e93",
-    marginBottom: 8,
-  },
-  bodyText: { margin: 0, fontSize: 15, lineHeight: 1.55, color: "#3a3a3c" },
-  tiny: { margin: "8px 0 0", fontSize: 12, color: "#aeaeb2" },
-  overlay: {
-    position: "absolute",
-    inset: 0,
-    zIndex: 2,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(255,255,255,0.72)",
-    backdropFilter: "blur(8px)",
-    borderRadius: 20,
-  },
-  overlayText: { marginTop: 12, fontWeight: 600, color: "#3a3a3c" },
-  heatWrap: { overflowX: "auto" },
-  heatGrid: {
-    display: "grid",
-    gridTemplateColumns: "48px repeat(5, minmax(0, 1fr))",
-    gap: 6,
-    minWidth: 280,
-  },
-  heatHead: { fontSize: 10, fontWeight: 700, textAlign: "center", color: "#8e8e93" },
-  heatTime: { fontSize: 11, color: "#8e8e93", display: "flex", alignItems: "center" },
-  heatCell: {
-    borderRadius: 8,
-    minHeight: 36,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 10,
-    fontWeight: 700,
-    color: "#1c1c1e88",
-    border: "1px solid #0000000a",
-  },
-  slotList: { listStyle: "none", margin: 0, padding: 0 },
-  slotItem: {
-    padding: "12px 14px",
-    borderRadius: 14,
-    background: "#f2f2f7",
-    marginBottom: 10,
-    border: "1px solid #e5e5ea",
-  },
-  slotTitle: { fontSize: 13, fontWeight: 600 },
-  slotNote: { fontSize: 11, color: "#8e8e93", marginTop: 4 },
-  statusCard: {
-    marginTop: 20,
-    padding: 12,
-    borderRadius: 14,
-    background: "#f9fafb",
-    border: "1px solid #e5e7eb",
-    display: "flex",
-    gap: 10,
-    alignItems: "flex-start",
-  },
-  statusLabel: { fontSize: 11, fontWeight: 600, color: "#6b7280" },
-  pre: { margin: "4px 0 0", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-all" },
-};

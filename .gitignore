@@ -12,3 +12,11 @@ ml-backend/data/triage_history.jsonl
 ml-backend/data/audit_log.jsonl
 ml-backend/data/fhir_records/
 ml-backend/data/audit_log.json
+
+# Python build artifacts
+__pycache__/
+*.pyc
+
+# MediVoice backend local persistence (Gemini audit trail)
+backend/data/triage_history.jsonl
+backend/data/audit_log.jsonl
