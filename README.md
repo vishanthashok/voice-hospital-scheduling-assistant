@@ -5,9 +5,6 @@
 Patients call a number. Gemini listens. A risk score hits the nurse's
 dashboard before the caller finishes their sentence.
 
-> **Hook 'em Hacks submission.** Built in one weekend.
-> Live demo: call **+1 (726) 239-4796** and watch the dashboard react.
-
 ---
 
 ## The problem
