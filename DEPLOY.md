@@ -20,7 +20,33 @@
 
 ---
 
-## 2. Web on Cloudflare Pages (CI)
+## 2. API on AWS (optional — if you already use AWS)
+
+Same environment variables as Render: `GEMINI_API_KEY`, `GEMINI_MODEL` (optional), Twilio vars, **`PUBLIC_BASE_URL`** = the **public HTTPS URL of this API** (no trailing slash).
+
+### Option A — **AWS App Runner** (simplest AWS path for this app)
+
+The repo includes [`backend/Dockerfile`](backend/Dockerfile).
+
+1. **ECR:** Create a repository (e.g. `medivoice-api`), then build and push the image from the `backend/` directory (Docker must target that folder as context).
+2. **App Runner:** Create a service **from the ECR image**. Set port to match the container (**8080** in the Dockerfile). Add the same env vars as above.
+3. **`PUBLIC_BASE_URL`:** Use the App Runner default URL (e.g. `https://xxxxxxxx.us-east-1.awsapprunner.com`) until you attach a custom domain, then set it to e.g. `https://api.medivoice.us`.
+4. **Custom domain:** App Runner → **Custom domains** → add `api.medivoice.us` → create the **CNAME** / validation records in **Route 53** (or GoDaddy).
+
+### Option B — **ECS Fargate + ALB**
+
+Run the same Docker image behind an Application Load Balancer. More moving parts (VPC, target groups, health checks on `/health`). Use this if your org already standardizes on ECS.
+
+### Frontend on AWS
+
+- **Amplify Hosting:** Connect the GitHub repo, set app root to **`frontend`**, build `npm run build`, artifact directory **`dist`**, and add **`VITE_API_BASE`** = your API URL at build time.  
+- **S3 + CloudFront:** Upload `frontend/dist` to a bucket, serve via CloudFront; set `VITE_API_BASE` **before** `npm run build` locally or in CI.
+
+You can still use **Cloudflare Pages** for the UI while the API lives on AWS — just point **`VITE_API_BASE`** at your App Runner (or ALB) URL.
+
+---
+
+## 3. Web on Cloudflare Pages (CI)
 
 The workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) deploys **`frontend/`** to Pages when you push to `main`.
 
@@ -36,19 +62,19 @@ Create the Pages project once: `npx wrangler pages project create medivoice-web`
 
 ---
 
-## 3. Twilio
+## 4. Twilio
 
 Voice webhook: `POST https://<your-api-host>/voice/incoming`  
 Or run `python scripts/set_twilio_webhook.py` with `PUBLIC_BASE_URL` in `.env`.
 
 ---
 
-## 4. Optional: `backend/Dockerfile`
+## 5. Optional: `backend/Dockerfile`
 
 Useful if you deploy the API on **Cloud Run**, **Railway**, or another Docker host; Render can use native Python without it.
 
 ---
 
-## Dropped: Fly.io
+## 6. Dropped: Fly.io
 
 We removed Fly-specific config. If you still have a `flyctl` login, you can ignore it for this project.
