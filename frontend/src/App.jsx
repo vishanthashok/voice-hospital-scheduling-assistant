@@ -18,7 +18,12 @@ import {
   Wifi,
   Sparkles,
   Mic,
+  Play,
+  Pause,
+  RefreshCw,
 } from "lucide-react";
+
+const SCORING_STORAGE_KEY = "medivoice:scoring-enabled";
 
 /** Dev: Vite proxies /triage, /export, /health → FastAPI. Prod: set `VITE_API_BASE`. */
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -195,7 +200,24 @@ export default function App() {
   const [patientTriage, setPatientTriage] = useState({});
   // Per-patient loading/error so the queue can show "Connecting to AI…" on each card.
   const [patientStatus, setPatientStatus] = useState({}); // { [id]: "loading" | "error" | "ok" }
+  // Master switch: when OFF, no automatic Gemini calls fire — protects quota while
+  // debugging. Manual per-patient "Score now" still works. Persisted to localStorage.
+  const [scoringEnabled, setScoringEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(SCORING_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const searchRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SCORING_STORAGE_KEY, scoringEnabled ? "1" : "0");
+    } catch {
+      /* storage disabled — fine, in-memory state still works */
+    }
+  }, [scoringEnabled]);
 
   const heatSeed = useMemo(
     () => Math.floor((triage?.risk_score ?? 40) * 100) % 1000,
@@ -233,24 +255,35 @@ export default function App() {
   }, []);
 
   // Re-run triage when user selects a patient so they always see the latest model output.
+  // Only fires when scoring is enabled — otherwise selection is a no-op for the API
+  // and the user can hit "Score now" in the workspace to trigger a single call.
   useEffect(() => {
+    if (!scoringEnabled) return;
     if (selected) void runTriage(selected, { refreshSelected: true });
-  }, [selected, runTriage]);
+  }, [selected, runTriage, scoringEnabled]);
 
-  // On mount: pre-triage every patient (sequentially to respect free-tier rate limits)
-  // so the Status Board can display scores and sort by acuity immediately.
+  // When scoring is enabled: pre-triage every patient (sequentially to respect free-tier
+  // rate limits) so the Status Board can sort by acuity. When disabled, this effect is
+  // a no-op — protects Gemini quota while you're debugging unrelated UI.
   useEffect(() => {
+    if (!scoringEnabled) return;
     let cancelled = false;
     (async () => {
       for (const p of MOCK_PATIENTS) {
         if (cancelled) return;
+        if (patientTriage[p.id] || patientStatus[p.id] === "loading") continue;
         await runTriage(p, { refreshSelected: false });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [runTriage]);
+    // Intentionally only react to scoringEnabled flipping on — don't re-run when
+    // patientTriage/patientStatus change (that would loop). The guard above uses
+    // the current snapshot read via closure, which is fine because runTriage itself
+    // writes into those maps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scoringEnabled, runTriage]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -424,7 +457,61 @@ export default function App() {
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-slate-500">Sorted by Gemini risk · highest first</p>
+              <p className="text-[11px] text-slate-500">
+                {scoringEnabled
+                  ? "Sorted by Gemini risk · highest first"
+                  : "Gemini scoring paused · no API calls are being made"}
+              </p>
+
+              {/* Master switch so debugging doesn't burn Gemini tokens. Off by default. */}
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScoringEnabled((v) => !v)}
+                  aria-pressed={scoringEnabled}
+                  title={
+                    scoringEnabled
+                      ? "Stop making /triage calls. Cached scores stay visible."
+                      : "Start scoring all patient cards with Gemini."
+                  }
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                    scoringEnabled
+                      ? "bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40 hover:bg-sky-500/30"
+                      : "bg-slate-800 text-slate-400 ring-1 ring-slate-700 hover:bg-slate-700/80 hover:text-slate-200"
+                  }`}
+                >
+                  {scoringEnabled ? (
+                    <>
+                      <Pause className="h-3 w-3" />
+                      Gemini: ON
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-3 w-3" />
+                      Start Gemini scoring
+                    </>
+                  )}
+                </button>
+                {scoringEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPatientTriage({});
+                      setPatientStatus({});
+                      (async () => {
+                        for (const p of MOCK_PATIENTS) {
+                          await runTriage(p, { refreshSelected: false });
+                        }
+                      })();
+                    }}
+                    title="Re-run Gemini on every patient (uses quota)"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-400 transition hover:border-slate-600 hover:text-slate-200"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Rescore
+                  </button>
+                )}
+              </div>
             </div>
             <ul className="max-h-[min(70vh,640px)] flex-1 space-y-2 overflow-y-auto p-3">
               <AnimatePresence initial={false}>
@@ -482,6 +569,19 @@ export default function App() {
                               </div>
                             ) : status === "error" && score == null ? (
                               <div className="text-[10px] font-bold text-rose-300">API ERROR</div>
+                            ) : score == null ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void runTriage(p, { refreshSelected: false });
+                                }}
+                                title="Score this one patient with Gemini"
+                                className="inline-flex items-center gap-1 rounded-md bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 hover:text-white"
+                              >
+                                <Play className="h-2.5 w-2.5" />
+                                Score
+                              </button>
                             ) : (
                               <>
                                 <div className={`font-mono text-lg font-extrabold leading-none tabular-nums ${tone.text}`}>
@@ -637,6 +737,16 @@ export default function App() {
 
                 {/* Actions */}
                 <div className="flex flex-wrap gap-3">
+                  {!triage && !loading && (
+                    <button
+                      type="button"
+                      onClick={() => void runTriage(selected, { refreshSelected: true })}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:bg-sky-400 min-[420px]:flex-initial"
+                    >
+                      <Play className="h-4 w-4" />
+                      Score with Gemini
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => void downloadFhir()}
